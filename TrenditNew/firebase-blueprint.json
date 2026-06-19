@@ -1,0 +1,117 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A product available for sale in the marketplace.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "oldPrice": { "type": "number" },
+        "brand": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "image": { "type": "string" },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "stock": { "type": "integer" },
+        "featured": { "type": "boolean" },
+        "rating": { "type": "number" },
+        "reviewsCount": { "type": "integer" },
+        "specs": { "type": "object" },
+        "sizes": { "type": "array", "items": { "type": "string" } },
+        "colors": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "price", "categoryId", "vendorId"]
+    },
+    "Vendor": {
+      "title": "Vendor",
+      "description": "A merchant selling products on the platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "email": { "type": "string", "format": "email" },
+        "description": { "type": "string" },
+        "logo": { "type": "string" },
+        "banner": { "type": "string" },
+        "rating": { "type": "number" },
+        "isVerified": { "type": "boolean" },
+        "location": { "type": "string" },
+        "commissionRate": { "type": "string" },
+        "productCount": { "type": "integer" },
+        "totalSales": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "A product category.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "icon": { "type": "string" },
+        "slug": { "type": "string" },
+        "description": { "type": "string" },
+        "image": { "type": "string" }
+      },
+      "required": ["name", "slug"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer purchase.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "total", "status"]
+    },
+    "CmsConfig": {
+      "title": "CMS Configuration",
+      "description": "Global application configuration and UI layout.",
+      "type": "object",
+      "properties": {
+        "sections": { "type": "array" },
+        "primaryColor": { "type": "string" },
+        "fontFamily": { "type": "string" }
+      }
+    },
+    "User": {
+      "title": "User",
+      "description": "A platform user account.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["customer", "vendor", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": { "schema": "Product", "description": "Storefront products" },
+    "/vendors/{vendorId}": { "schema": "Vendor", "description": "Marketplace vendors" },
+    "/categories/{categoryId}": { "schema": "Category", "description": "Product categories" },
+    "/orders/{orderId}": { "schema": "Order", "description": "Customer orders" },
+    "/users/{userId}": { "schema": "User", "description": "User profiles and roles" },
+    "/cms/config": { "schema": "CmsConfig", "description": "Site-wide configuration" }
+  }
+}
