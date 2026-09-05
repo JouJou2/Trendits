@@ -6,7 +6,6 @@ import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/
 import { db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
 import toast from 'react-hot-toast';
-import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { fetchImageAnalysis } from '../../services/aiBackend';
 import { useAuth } from '../../contexts/AuthContext';
@@ -436,10 +435,17 @@ useEffect(() => {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
+        // Parsed with ExcelJS rather than xlsx: this is the one place the admin
+        // panel reads a file it did not create, and xlsx carries unpatched
+        // prototype-pollution and ReDoS advisories with no fix available.
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(evt.target?.result as ArrayBuffer);
+        const ws = wb.worksheets[0];
+
+        if (!ws) {
+          toast.error('No worksheet found in the Excel file.');
+          return;
+        }
 
         interface ExcelProductRow {
           [key: string]: unknown;
@@ -469,7 +475,41 @@ useEffect(() => {
           return undefined;
         };
 
-        const data = XLSX.utils.sheet_to_json(ws) as ExcelProductRow[];
+        // ExcelJS hands back cells, not plain rows, so rebuild the header-keyed
+        // objects the rest of this importer expects (what sheet_to_json gave us).
+        // A cell's value can be a formula/hyperlink/rich-text wrapper, so unwrap
+        // it down to the primitive the mapping code below compares against.
+        const cellValue = (raw: ExcelJS.CellValue): unknown => {
+          if (raw === null || raw === undefined) return undefined;
+          if (raw instanceof Date) return raw;
+          if (typeof raw === 'object') {
+            if ('result' in raw) return raw.result;
+            if ('richText' in raw) return raw.richText.map(t => t.text).join('');
+            if ('text' in raw) return raw.text;
+            return undefined;
+          }
+          return raw;
+        };
+
+        const headers: string[] = [];
+        ws.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
+          headers[col] = String(cellValue(cell.value) ?? '').trim();
+        });
+
+        const data: ExcelProductRow[] = [];
+        ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+          if (rowNumber === 1) return; // header
+          const entry: ExcelProductRow = {};
+          row.eachCell({ includeEmpty: false }, (cell, col) => {
+            const key = headers[col];
+            // Header names come from an uploaded file, so never let one reach
+            // Object.prototype — that is the exact bug class we just moved off.
+            if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') return;
+            const value = cellValue(cell.value);
+            if (value !== undefined) entry[key] = value;
+          });
+          if (Object.keys(entry).length > 0) data.push(entry);
+        });
 
         if (data.length === 0) {
           toast.error('No data found in the Excel file.');
@@ -562,7 +602,7 @@ useEffect(() => {
         toast.error("Failed to import file. Please check the format.");
       }
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   };
 
   const handleImportImage = async (file: File) => {

@@ -115,10 +115,6 @@ service cloud.firestore {
              data.email is string && data.email.matches('^.+@.+$') && data.email.size() <= 150;
     }
 
-    function isVendorStatsUpdate() {
-      return incoming().diff(existing()).affectedKeys().hasOnly(['totalSales', 'orderCount', 'updatedAt']);
-    }
-
     match /vendors/{vendorId} {
       allow read: if true;
       allow create: if isSuperAdmin() ||
@@ -126,11 +122,15 @@ service cloud.firestore {
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vendor' &&
          isValidVendor(incoming()) &&
          isValidId(vendorId));
+      // totalSales/orderCount are written only by the backend's order route via
+      // the Admin SDK, which bypasses these rules entirely. There was previously
+      // a clause letting any signed-in account edit those two fields on any
+      // vendor: it served no client need and let a vendor inflate their own
+      // figures, which rank the public "Top Vendors" row on the homepage.
       allow update: if isAdmin() ||
         (request.auth.uid == vendorId &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['vendor', 'admin', 'super_admin'] &&
-         isValidVendor(incoming())) ||
-        (isSignedIn() && isVendorStatsUpdate());
+         isValidVendor(incoming()));
       allow delete: if isSuperAdmin();
     }
 
@@ -213,12 +213,36 @@ service cloud.firestore {
       allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 
+    // A vendor may only notify a user they actually have a relationship with.
+    // Each branch mirrors one of the four notifications the app sends, and proves
+    // the link from data the vendor cannot forge. Without these a vendor could
+    // push arbitrary notifications to every user on the platform.
+    function notifiesFollower(userId) {
+      return incoming().get('type', '') == 'new_product' &&
+        exists(/databases/$(database)/documents/users/$(userId)/following/$(request.auth.uid));
+    }
+    function notifiesOwnOrderCustomer() {
+      return incoming().get('type', '') == 'order_status' &&
+        exists(/databases/$(database)/documents/vendors/$(request.auth.uid)/orders/$(incoming().get('orderId', '')));
+    }
+    function notifiesOwnQuestioner() {
+      return incoming().get('type', '') == 'question_answered' &&
+        get(/databases/$(database)/documents/questions/$(incoming().get('questionId', ''))).data.vendorId == request.auth.uid;
+    }
+    function notifiesOwnReviewer() {
+      return incoming().get('type', '') == 'review_reply' &&
+        get(/databases/$(database)/documents/reviews/$(incoming().get('reviewId', ''))).data.vendorId == request.auth.uid;
+    }
+
     match /users/{userId}/notifications/{notificationId} {
       allow read: if isOwner(userId);
-      // Any vendor or admin account can notify a specific user (new product drop,
-      // order status change, review reply, question answered). Trust is at the
-      // role level, same as the rest of the vendor-facing write paths in this app.
-      allow create: if isSignedIn() && (isAdmin() || isVendor());
+      allow create: if isAdmin() ||
+        (isVendor() && (
+          notifiesFollower(userId) ||
+          notifiesOwnOrderCustomer() ||
+          notifiesOwnQuestioner() ||
+          notifiesOwnReviewer()
+        ));
       allow update: if isOwner(userId);
       allow delete: if isOwner(userId);
     }
@@ -280,9 +304,17 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || incoming().email in ['get.corp.je@gmail.com', 'getcorp.je@gmail.com']); 
-      allow update: if (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'updatedAt', 'role', 'notifyOrders', 'notifyDelivery']) && incoming().role == existing().role) ||
+      // User docs hold name, email, phone and role. Every non-admin read in the
+      // app is of the caller's own doc, so there is no reason to expose other
+      // customers' contact details to any signed-in account — vendors included.
+      // The isAdmin()/isVendor() helpers use rule-internal get(), which is not
+      // subject to this rule, so role resolution still works.
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || incoming().email in ['get.corp.je@gmail.com', 'getcorp.je@gmail.com']);
+      // 'role' is deliberately absent from the allowed keys: an unchanged field
+      // never appears in affectedKeys(), so self-service edits still pass, and
+      // privilege escalation is refused outright instead of by a follow-up check.
+      allow update: if (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'updatedAt', 'notifyOrders', 'notifyDelivery'])) ||
                      (isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasAny(['role', 'updatedAt']));
       allow delete: if isSuperAdmin();
     }
@@ -370,8 +402,12 @@ service cloud.firestore {
 
     match /searchAnalytics/{docId} {
       allow read: if true;
-      allow create: if isValidSearchAnalytics(incoming());
-      allow update: if isValidSearchAnalytics(incoming()) &&
+      // Both writes previously took no auth check at all, leaving an open write
+      // endpoint anyone could script to burn Firestore quota. logSearch() in
+      // Header.tsx already swallows failures, so anonymous searches simply go
+      // unlogged rather than breaking search itself.
+      allow create: if isSignedIn() && isValidSearchAnalytics(incoming());
+      allow update: if isSignedIn() && isValidSearchAnalytics(incoming()) &&
                        incoming().diff(existing()).affectedKeys().hasOnly(['count', 'lastSearched']);
       allow delete: if isAdmin();
     }
