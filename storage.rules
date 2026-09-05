@@ -1,0 +1,62 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidImage() {
+      return request.resource.size < 5 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/.*');
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Product images — uploaded by signed-in admins/vendors from the admin dashboard.
+    // The actual product record (price, category, vendorId, etc.) is separately gated
+    // by Firestore rules; this only controls the raw file upload.
+    match /products/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidImage();
+      allow delete: if isSignedIn();
+    }
+
+    // Homepage promotional banners
+    match /banners/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidImage();
+      allow delete: if isSignedIn();
+    }
+
+    // Category images
+    match /categories/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidImage();
+      allow delete: if isSignedIn();
+    }
+
+    // Vendor logo/banner uploaded during initial store setup, before a vendor doc exists
+    match /vendor-logos/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidImage();
+      allow delete: if isSignedIn();
+    }
+    match /vendor-banners/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidImage();
+      allow delete: if isSignedIn();
+    }
+
+    // A vendor's own store logo/banner, edited later from their Account page —
+    // vendor doc IDs are always the owning user's UID, so only that vendor can write here.
+    match /vendors/{vendorId}/{imageType}/{fileName} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && request.auth.uid == vendorId && isValidImage();
+      allow delete: if isSignedIn() && request.auth.uid == vendorId;
+    }
+  }
+}

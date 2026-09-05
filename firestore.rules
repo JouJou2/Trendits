@@ -1,0 +1,453 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email in ["get.corp.je@gmail.com", "getcorp.je@gmail.com"] ||
+        exists(/databases/$(database)/documents/super_admins/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+      );
+    }
+    
+    function isAdmin() {
+      return isSignedIn() && (
+        isSuperAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email in ["admin@trendit.com", "admin@trendit.lb"] ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isVendor() {
+      return isSignedIn() && (
+        isAdmin() ||
+        exists(/databases/$(database)/documents/vendors/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['vendor', 'admin', 'super_admin']
+      );
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function ownsVendor(vendorId) {
+      return isSignedIn() && vendorId is string &&
+        exists(/databases/$(database)/documents/vendors/$(vendorId)) &&
+        get(/databases/$(database)/documents/vendors/$(vendorId)).data.ownerId == request.auth.uid;
+    }
+
+    // A vendor must be admin-approved (status == 'active') before they can list
+    // products — pending/suspended stores can still sign in and edit their
+    // profile, but can't sell. Admins are unaffected by this check.
+    function isActiveVendor() {
+      return isVendor() &&
+        exists(/databases/$(database)/documents/vendors/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/vendors/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // PRODUCTS
+    // -------------------------------------------------------------------------
+    
+    function isValidProduct(data) {
+      return data.keys().hasAll(['title', 'price', 'categoryId']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.price is number && data.price >= 0 &&
+             data.categoryId is string && data.categoryId.size() <= 100 &&
+             (data.get('vendorId', '') is string) &&
+             (data.get('stock', 0) is number) &&
+             (data.get('feePercentage', 0) is number);
+    }
+
+    // A vendor may only publish under their own id — otherwise vendor A could
+    // create products attributed to vendor B.
+    function ownsIncomingProduct() {
+      return isActiveVendor() && incoming().get('vendorId', '') == request.auth.uid;
+    }
+
+    // feePercentage is the platform's commission and vendorId is the payout
+    // target: neither may be edited by the vendor, only by an admin. Without
+    // this a vendor could zero out the commission on their own listing.
+    function preservesPlatformFields() {
+      return incoming().get('feePercentage', 0) == existing().get('feePercentage', 0) &&
+             incoming().get('vendorId', '') == existing().get('vendorId', '');
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if isValidProduct(incoming()) && isValidId(productId) &&
+        (isAdmin() || ownsIncomingProduct());
+      allow update: if isValidProduct(incoming()) &&
+        (isAdmin() ||
+         (isActiveVendor() && existing().vendorId == request.auth.uid && preservesPlatformFields()));
+      allow delete: if isAdmin() || (isVendor() && resource.data.vendorId == request.auth.uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // VENDORS
+    // -------------------------------------------------------------------------
+    
+    function isValidVendor(data) {
+      return data.keys().hasAll(['name', 'email']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.email is string && data.email.matches('^.+@.+$') && data.email.size() <= 150;
+    }
+
+    function isVendorStatsUpdate() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['totalSales', 'orderCount', 'updatedAt']);
+    }
+
+    match /vendors/{vendorId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() ||
+        (request.auth.uid == vendorId &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vendor' &&
+         isValidVendor(incoming()) &&
+         isValidId(vendorId));
+      allow update: if isAdmin() ||
+        (request.auth.uid == vendorId &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['vendor', 'admin', 'super_admin'] &&
+         isValidVendor(incoming())) ||
+        (isSignedIn() && isVendorStatsUpdate());
+      allow delete: if isSuperAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // USER ORDERS (Subcollection) — Customer's own orders
+    // -------------------------------------------------------------------------
+    
+    // Orders are priced and created by the backend. The only legitimate change
+    // afterwards is moving the order through its lifecycle, so non-admins may
+    // touch nothing but the status — never totals, items or addresses.
+    function isOrderStatusUpdate() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+    }
+
+    function isOrderVendor() {
+      return isVendor() && request.auth.uid in existing().get('vendorIds', []);
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['orderTotal', 'status']) &&
+             data.orderTotal is number && data.orderTotal >= 0 &&
+             data.status in ['new', 'pending', 'processing', 'confirmed', 'dispatched', 'shipped', 'delivered', 'cancelled'];
+    }
+
+    match /users/{userId}/orders/{orderId} {
+      allow read: if isOwner(userId) || isAdmin();
+      // Orders are created only by the backend via the Admin SDK (which bypasses
+      // these rules). Clients cannot write order documents, so an order total can
+      // never be set from the browser console.
+      allow create: if false;
+      allow update: if isAdmin() ||
+        ((isOwner(userId) || isOrderVendor()) && isOrderStatusUpdate());
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // USER ADDRESSES (Subcollection) — Customer's saved delivery addresses
+    // -------------------------------------------------------------------------
+
+    function isValidAddress(data) {
+      return data.keys().hasAll(['label', 'name', 'phone', 'address', 'city', 'zone']) &&
+             data.label in ['Home', 'Work', 'Other'] &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() <= 30 &&
+             data.address is string && data.address.size() > 0 && data.address.size() <= 300 &&
+             data.city is string && data.city.size() <= 100 &&
+             data.zone is string && data.zone.size() <= 100;
+    }
+
+    match /users/{userId}/addresses/{addressId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidAddress(incoming());
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // USER WISHLIST (Subcollection) — Customer's saved favorites
+    // -------------------------------------------------------------------------
+
+    match /users/{userId}/wishlist/{productId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidId(productId);
+      allow delete: if isOwner(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // STORE FOLLOWING (Subcollections on both sides) + NOTIFICATIONS
+    // -------------------------------------------------------------------------
+
+    match /users/{userId}/following/{vendorId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidId(vendorId);
+      allow delete: if isOwner(userId);
+    }
+
+    match /vendors/{vendorId}/followers/{userId} {
+      allow read: if isAdmin() || ownsVendor(vendorId);
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/notifications/{notificationId} {
+      allow read: if isOwner(userId);
+      // Any vendor or admin account can notify a specific user (new product drop,
+      // order status change, review reply, question answered). Trust is at the
+      // role level, same as the rest of the vendor-facing write paths in this app.
+      allow create: if isSignedIn() && (isAdmin() || isVendor());
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // USER BROWSING HISTORY (Subcollection)
+    // -------------------------------------------------------------------------
+
+    match /users/{userId}/browsingHistory/{productId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidId(productId);
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // VENDOR ORDERS (Subcollection) — Vendor's received orders
+    // -------------------------------------------------------------------------
+    
+    match /vendors/{vendorId}/orders/{orderId} {
+  allow read: if (isSignedIn() && request.auth.uid == vendorId) || isAdmin();
+  allow create: if false;
+  allow update: if isAdmin() ||
+    (isSignedIn() && request.auth.uid == vendorId && isOrderStatusUpdate());
+  allow delete: if isAdmin();
+}
+    // -------------------------------------------------------------------------
+    // GLOBAL ORDERS (Flat collection) — Admin only
+    // -------------------------------------------------------------------------
+    
+    match /orders/{orderId} {
+      allow read: if isAdmin();
+      allow list: if isAdmin();
+      allow create: if false;
+      allow update: if isAdmin() || (isOrderVendor() && isOrderStatusUpdate());
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // CATEGORIES
+    // -------------------------------------------------------------------------
+    
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(categoryId);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // USERS
+    // -------------------------------------------------------------------------
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'role']) &&
+             data.name is string && data.name.size() <= 100 &&
+             data.email is string && data.email.matches('^.+@.+$') &&
+             data.role in ['user', 'vendor', 'admin', 'super_admin'];
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || incoming().email in ['get.corp.je@gmail.com', 'getcorp.je@gmail.com']); 
+      allow update: if (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'updatedAt', 'role', 'notifyOrders', 'notifyDelivery']) && incoming().role == existing().role) ||
+                     (isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasAny(['role', 'updatedAt']));
+      allow delete: if isSuperAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // REVIEWS
+    // -------------------------------------------------------------------------
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['productId', 'vendorId', 'userId', 'user', 'rating', 'comment', 'status']) &&
+             data.productId is string && data.productId.size() > 0 &&
+             data.vendorId is string &&
+             data.userId is string &&
+             data.user is string && data.user.size() <= 100 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() > 0 && data.comment.size() <= 2000 &&
+             data.status == 'Pending';
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidReview(incoming());
+      allow update: if (isOwner(existing().userId) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt', 'status']) &&
+                          incoming().status == 'Pending') ||
+                        ((isAdmin() || ownsVendor(existing().vendorId)) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'reply', 'repliedAt', 'repliedBy']) &&
+                          incoming().status in ['Pending', 'Approved', 'Rejected']);
+      allow delete: if isOwner(existing().userId) || isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // PRODUCT Q&A
+    // -------------------------------------------------------------------------
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['productId', 'vendorId', 'userId', 'user', 'question', 'status']) &&
+             data.productId is string && data.productId.size() > 0 &&
+             data.vendorId is string &&
+             data.userId is string &&
+             data.user is string && data.user.size() <= 100 &&
+             data.question is string && data.question.size() > 0 && data.question.size() <= 1000 &&
+             data.status == 'Pending';
+    }
+
+    match /questions/{questionId} {
+      allow read: if true;
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidQuestion(incoming());
+      allow update: if (isOwner(existing().userId) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['question', 'updatedAt'])) ||
+                        ((isAdmin() || ownsVendor(existing().vendorId)) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['answer', 'answeredBy', 'answeredAt', 'status']) &&
+                          incoming().status in ['Pending', 'Answered']);
+      allow delete: if isOwner(existing().userId) || isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // VENDOR VERIFICATION REQUESTS
+    // -------------------------------------------------------------------------
+
+    function isValidVerificationRequest(data) {
+      return data.keys().hasAll(['vendorId', 'businessName', 'yearsOperating', 'qualityDescription', 'status']) &&
+             data.vendorId is string &&
+             data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
+             data.qualityDescription is string && data.qualityDescription.size() > 0 && data.qualityDescription.size() <= 2000 &&
+             data.status == 'Pending';
+    }
+
+    match /verificationRequests/{requestId} {
+      allow read: if isAdmin() || ownsVendor(resource.data.vendorId);
+      allow create: if ownsVendor(incoming().vendorId) && isValidVerificationRequest(incoming());
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // SEARCH ANALYTICS
+    // -------------------------------------------------------------------------
+
+    function isValidSearchAnalytics(data) {
+      return data.keys().hasAll(['term', 'count']) &&
+             data.term is string && data.term.size() > 0 && data.term.size() <= 100 &&
+             data.count is number && data.count >= 0;
+    }
+
+    match /searchAnalytics/{docId} {
+      allow read: if true;
+      allow create: if isValidSearchAnalytics(incoming());
+      allow update: if isValidSearchAnalytics(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['count', 'lastSearched']);
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // SUPPORT MESSAGES
+    // -------------------------------------------------------------------------
+
+    function isValidSupportMessage(data) {
+      return data.keys().hasAll(['userId', 'message', 'status']) &&
+             data.userId is string &&
+             data.message is string && data.message.size() > 0 && data.message.size() <= 2000 &&
+             data.status == 'open';
+    }
+
+    match /supportMessages/{messageId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidSupportMessage(incoming());
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // MARKETING (Promos & Campaigns)
+    // -------------------------------------------------------------------------
+
+    match /promos/{promoId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /promoRedemptions/{redemptionId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /campaigns/{campaignId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // HOMEPAGE BANNERS — admin-managed campaign/offer carousel images
+    // -------------------------------------------------------------------------
+
+    match /banners/{bannerId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // CMS
+    // -------------------------------------------------------------------------
+
+    match /cms/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // SITE SETTINGS
+    // -------------------------------------------------------------------------
+
+    match /siteSettings/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // PAYOUT RECORDS (manual vendor payout ledger)
+    // -------------------------------------------------------------------------
+
+    match /payoutRecords/{recordId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

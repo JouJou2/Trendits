@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-primary: #0452C8;
+  --color-primary-hover: #0341a3;
+  --color-secondary: #FE5750;
+  --color-secondary-hover: #e54740;
+}
+
+/* Safety net: nothing should ever make the page pan sideways. `clip` rather than
+   `hidden` because `overflow: hidden` on an ancestor silently breaks every
+   position:sticky descendant (the header, admin sidebars). */
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+body {
+  background-color: #eef2f7;
+  font-family: var(--font-sans);
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Type system ───────────────────────────────────────────────────────────
+   The design previously used emphasis as its default: ~40% of visible text was
+   weight 800+ and ~32% was under 12px. When everything is bold, nothing reads
+   as emphasised and the page looks noisy rather than designed.
+
+   The rules here: headings carry weight (700), body text stays regular, and
+   boldness is spent only on prices and headings. Small print has a legibility
+   floor — 7-9px text is unreadable and fails accessibility outright.        */
+h1, h2, h3, h4, h5, h6, .font-display {
+  font-family: var(--font-display);
+  font-weight: 700; /* was 800 — bold, not black */
+  letter-spacing: -0.015em; /* display faces tighten slightly at large sizes */
+}
+
+body {
+  line-height: 1.5;
+}
+
+/* Legibility floor. Tailwind arbitrary sizes below this are design mistakes
+   rather than deliberate choices, so clamp them centrally instead of hunting
+   ~300 individual class instances. */
+.text-\[7px\],
+.text-\[8px\],
+.text-\[8\.5px\],
+.text-\[9px\] {
+  font-size: 11px;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* iOS Safari force-zooms the viewport whenever a focused form control has a
+   font-size under 16px — and once it zooms, the whole page becomes pannable,
+   which reads as the layout "coming loose". Enforcing 16px on touch widths is
+   the accessible fix (user-scalable=no is ignored by iOS and harms zooming). */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
