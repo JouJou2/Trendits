@@ -13,6 +13,34 @@ import { useAuth } from '../../contexts/AuthContext';
 // ── FIREBASE STORAGE SETUP ──
 const storage = getStorage();
 
+// Vendors paste whatever Google Drive hands them, which is a link to Drive's
+// *viewer page*. That returns HTML, so an <img> tag renders a broken image, and
+// drive.google.com is not on the site's CSP img-src list either. Every Drive URL
+// shape carries the same file id, so pull it out and rewrite to Google's image
+// CDN — lh3.googleusercontent.com, which serves real image bytes and is already
+// allowed by the CSP.
+//
+// This cannot fix sharing: the file must still be "Anyone with the link".
+const DRIVE_ID_PATTERNS = [
+  /drive\.google\.com\/file\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]{10,})/,  // /file/d/ID/view, /file/u/1/d/ID/view
+  /drive\.google\.com\/open\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/,        // /open?id=ID
+  /(?:drive|docs)\.google\.com\/uc\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/, // /uc?export=view&id=ID
+  /drive\.google\.com\/thumbnail\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/,   // /thumbnail?id=ID
+];
+
+const normalizeImageUrl = (raw: unknown): string => {
+  const url = String(raw ?? '').trim();
+  if (!url) return '';
+
+  for (const pattern of DRIVE_ID_PATTERNS) {
+    const match = url.match(pattern);
+    if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
+  }
+
+  // Already a direct Drive CDN link, or any other host — leave it alone.
+  return url;
+};
+
 const uploadImageToStorage = (
   file: File,
   path: string = 'products',
@@ -572,8 +600,8 @@ useEffect(() => {
             description: importedDescription ? String(importedDescription) : '',
             categoryId: normalizeCategory(importedCategory),
             vendorId: resolvedVendorId,
-            image: importedImage ? String(importedImage) : '',
-            images: importedImage ? [String(importedImage)] : [],
+            image: normalizeImageUrl(importedImage),
+            images: normalizeImageUrl(importedImage) ? [normalizeImageUrl(importedImage)] : [],
             stock: Number(importedStock) || 0,
             featured: isFeatured,
             rating: Number(importedRating) || 0,
