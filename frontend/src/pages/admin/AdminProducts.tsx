@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, Edit, Trash2, Tag, AlertCircle, TrendingUp, Database, Download, Upload, Check, X, Link as LinkIcon, Loader2 } from 'lucide-react';
-import { collection, limit, onSnapshot, query, where, deleteDoc, doc, writeBatch, addDoc, getDoc } from 'firebase/firestore';
+import { Plus, Search, Filter, Edit, Trash2, Tag, AlertCircle, TrendingUp, Database, Download, Upload, Check, X, Link as LinkIcon, Loader2, Image as ImageIcon } from 'lucide-react';
+import { collection, limit, onSnapshot, query, where, deleteDoc, doc, writeBatch, addDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { importImageFromUrl, importImages } from '../../services/imageImportApi';
@@ -738,6 +738,69 @@ useEffect(() => {
     }
   };
 
+  /**
+   * One-off repair for products saved before images were imported server-side.
+   * Those rows still hold a third-party URL (a Drive share link, a stock photo),
+   * which the browser often cannot render and which disappears the moment the
+   * other host changes. Pulls each one into our bucket and rewrites the record.
+   *
+   * Only touches products whose image is not already in Storage, and leaves the
+   * row untouched when the fetch fails, so it is safe to run more than once.
+   */
+  const handleBackfillImages = async () => {
+    const needsFixing = products.filter(p => {
+      const url = String(p.image || '').trim();
+      return url && !url.startsWith('https://firebasestorage.googleapis.com/');
+    });
+
+    if (!needsFixing.length) {
+      toast.success('Every product image is already stored in your own bucket.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `${needsFixing.length} product${needsFixing.length === 1 ? '' : 's'} still link to an outside host.\n\n` +
+      `Copy those images into your own storage and update the products?\n\n` +
+      `Products whose image cannot be fetched are left exactly as they are.`,
+    );
+    if (!confirmed) return;
+
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) {
+      toast.error('Your session expired. Sign in again and retry.');
+      return;
+    }
+
+    const toastId = toast.loading(`Repairing images 0/${needsFixing.length}...`);
+    let fixed = 0;
+    const failures: string[] = [];
+
+    for (const [index, product] of needsFixing.entries()) {
+      toast.loading(`Repairing images ${index + 1}/${needsFixing.length}...`, { id: toastId });
+      try {
+        const imported = await importImageFromUrl(idToken, String(product.image));
+        await updateDoc(doc(db, 'products', String(product.id)), {
+          image: imported.url,
+          images: [imported.url],
+          updatedAt: new Date().toISOString(),
+        });
+        fixed++;
+      } catch (err) {
+        failures.push(`${product.title || product.id}: ${err instanceof Error ? err.message : 'failed'}`);
+      }
+    }
+
+    if (failures.length) {
+      console.warn('Image backfill failures:', failures);
+      toast.error(
+        `Repaired ${fixed} of ${needsFixing.length}. ${failures.length} could not be fetched — first: ${failures[0]}`,
+        { id: toastId, duration: 12000 },
+      );
+    } else {
+      toast.success(`Repaired ${fixed} product image${fixed === 1 ? '' : 's'}.`, { id: toastId });
+    }
+  };
+
   const handleUndoLastImport = async () => {
     // Prefer deleting the explicit last-imported IDs saved in localStorage
     try {
@@ -914,6 +977,16 @@ useEffect(() => {
           >
             <Download className="w-4 h-4" /> Template
           </button>
+
+          {(isAdmin || isSuperAdmin) && (
+            <button
+              onClick={handleBackfillImages}
+              className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 active:scale-95"
+              title="Copy any product image still hosted elsewhere into your own storage"
+            >
+              <ImageIcon className="w-4 h-4" /> Fix external images
+            </button>
+          )}
 
           {(isAdmin || isSuperAdmin) && (
             <button
