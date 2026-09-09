@@ -16,3 +16,10 @@ export const FIRESTORE_DATABASE_ID =
   process.env.FIRESTORE_DATABASE_ID || 'ai-studio-0ea7c2e5-49c2-4214-8b5d-6b7be0148e4c';
 
 export const adminDb = getFirestore(app, FIRESTORE_DATABASE_ID);
+
+// Default Cloud Storage bucket. Overridable so a non-production project can
+// point elsewhere without a code change.
+export const STORAGE_BUCKET =
+  process.env.STORAGE_BUCKET || 'gen-lang-client-0419149292.firebasestorage.app';
+
+export const adminBucket = admin.storage().bucket(STORAGE_BUCKET);

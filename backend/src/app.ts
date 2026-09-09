@@ -6,6 +6,7 @@ import { analyzeImageRouter } from './routes/analyzeImage.js';
 import { twoFactorRouter } from './routes/twoFactor.js';
 import { signupRouter } from './routes/signup.js';
 import { ordersRouter } from './routes/orders.js';
+import { importImageRouter } from './routes/importImage.js';
 import { rateLimit } from './rateLimit.js';
 import { requireAuth } from './requireAuth.js';
 
@@ -31,3 +32,7 @@ app.use('/api/analyze-image', rateLimit({ windowMs: 60_000, max: 10, name: 'imag
 app.use('/api/2fa', rateLimit({ windowMs: 15 * 60_000, max: 10, name: '2fa' }), twoFactorRouter);
 app.use('/api/signup', rateLimit({ windowMs: 15 * 60_000, max: 10, name: 'signup' }), signupRouter);
 app.use('/api/orders', rateLimit({ windowMs: 60_000, max: 15, name: 'orders' }), ordersRouter);
+// Server-side image ingestion for the spreadsheet importer. Staff only, and
+// rate limited: it makes outbound requests on the caller's behalf, so it must
+// never be reachable by an anonymous visitor.
+app.use('/api/images', rateLimit({ windowMs: 60_000, max: 60, name: 'images' }), requireAuth({ staffOnly: true }), importImageRouter);

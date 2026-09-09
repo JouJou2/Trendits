@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Search, Filter, Edit, Trash2, Tag, AlertCircle, TrendingUp, Database, Download, Upload, Check, X, Link as LinkIcon, Loader2 } from 'lucide-react';
 import { collection, limit, onSnapshot, query, where, deleteDoc, doc, writeBatch, addDoc, getDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { db, handleFirestoreError, OperationType } from '../../services/firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
+import { importImageFromUrl, importImages } from '../../services/imageImportApi';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
 import toast from 'react-hot-toast';
 import ExcelJS from 'exceljs';
@@ -12,34 +13,6 @@ import { useAuth } from '../../contexts/AuthContext';
 
 // ── FIREBASE STORAGE SETUP ──
 const storage = getStorage();
-
-// Vendors paste whatever Google Drive hands them, which is a link to Drive's
-// *viewer page*. That returns HTML, so an <img> tag renders a broken image, and
-// drive.google.com is not on the site's CSP img-src list either. Every Drive URL
-// shape carries the same file id, so pull it out and rewrite to Google's image
-// CDN — lh3.googleusercontent.com, which serves real image bytes and is already
-// allowed by the CSP.
-//
-// This cannot fix sharing: the file must still be "Anyone with the link".
-const DRIVE_ID_PATTERNS = [
-  /drive\.google\.com\/file\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]{10,})/,  // /file/d/ID/view, /file/u/1/d/ID/view
-  /drive\.google\.com\/open\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/,        // /open?id=ID
-  /(?:drive|docs)\.google\.com\/uc\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/, // /uc?export=view&id=ID
-  /drive\.google\.com\/thumbnail\?(?:.*&)?id=([a-zA-Z0-9_-]{10,})/,   // /thumbnail?id=ID
-];
-
-const normalizeImageUrl = (raw: unknown): string => {
-  const url = String(raw ?? '').trim();
-  if (!url) return '';
-
-  for (const pattern of DRIVE_ID_PATTERNS) {
-    const match = url.match(pattern);
-    if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
-  }
-
-  // Already a direct Drive CDN link, or any other host — leave it alone.
-  return url;
-};
 
 const uploadImageToStorage = (
   file: File,
@@ -562,6 +535,45 @@ useEffect(() => {
           return;
         }
 
+        // Copy every referenced image into our own Storage bucket before writing
+        // any product. Listings then point at a file we control, instead of
+        // hotlinking a vendor's Drive — which breaks the moment they move it.
+        const sourceUrls = filteredData
+          .map(row => String(firstValue(row, ['ImageURL', 'Image Url', 'imageUrl', 'Image']) ?? '').trim())
+          .filter(Boolean);
+
+        const imageResults = new Map<string, { url?: string; error?: string }>();
+
+        if (sourceUrls.length) {
+          const idToken = await auth.currentUser?.getIdToken();
+          if (!idToken) {
+            toast.error('Your session expired. Sign in again and retry the import.');
+            return;
+          }
+
+          const imageToastId = toast.loading(`Importing images 0/${new Set(sourceUrls).size}...`);
+          try {
+            const results = await importImages(idToken, sourceUrls, (done, total) => {
+              toast.loading(`Importing images ${done}/${total}...`, { id: imageToastId });
+            });
+            results.forEach((value, key) => imageResults.set(key, value));
+
+            const failures = [...results.values()].filter(r => r.error);
+            if (failures.length) {
+              toast.error(
+                `${failures.length} image${failures.length === 1 ? '' : 's'} could not be imported. First problem: ${failures[0].error}`,
+                { id: imageToastId, duration: 9000 },
+              );
+            } else {
+              toast.success(`Imported ${results.size} image${results.size === 1 ? '' : 's'}.`, { id: imageToastId });
+            }
+          } catch (imageError) {
+            toast.dismiss(imageToastId);
+            console.error('Image import step failed:', imageError);
+            toast.error('Images could not be imported. Products will be created without them.');
+          }
+        }
+
         const batch = writeBatch(db);
         let count = 0;
         const importedIds: string[] = [];
@@ -588,6 +600,13 @@ useEffect(() => {
           const importedDescription = firstValue(row, ['Description', 'description']);
           const importedImage = firstValue(row, ['ImageURL', 'Image Url', 'imageUrl', 'Image']);
 
+          // Only ever a URL in our own bucket. A link that failed to import is
+          // dropped rather than stored, so a listing can never end up pointing
+          // at a third-party host we do not control.
+          const storedImage = importedImage
+            ? imageResults.get(String(importedImage).trim())?.url ?? ''
+            : '';
+
           const isFeatured = ['yes', 'true', '1'].includes(String(importedFeatured || '').trim().toLowerCase());
 
           const productData = {
@@ -600,8 +619,8 @@ useEffect(() => {
             description: importedDescription ? String(importedDescription) : '',
             categoryId: normalizeCategory(importedCategory),
             vendorId: resolvedVendorId,
-            image: normalizeImageUrl(importedImage),
-            images: normalizeImageUrl(importedImage) ? [normalizeImageUrl(importedImage)] : [],
+            image: storedImage,
+            images: storedImage ? [storedImage] : [],
             stock: Number(importedStock) || 0,
             featured: isFeatured,
             rating: Number(importedRating) || 0,
@@ -685,27 +704,16 @@ useEffect(() => {
     }
   };
 
+  /**
+   * Takes any image link and copies it into our own Storage bucket, then opens
+   * the new-product form pointing at the stored copy. This used to hand the form
+   * a drive.google.com/uc?...&export=download URL, which the browser cannot
+   * render (Drive answers with HTML unless the file is public), the site's CSP
+   * does not allow, and Google throttles when hotlinked.
+   */
   const handleImportDriveLink = async () => {
-    const url = window.prompt("Enter Google Drive Image Link:");
-    if (!url) return;
-
-    // Extract ID from Drive link
-    // https://drive.google.com/file/d/1X-ID-HERE/view?usp=sharing
-    // https://drive.google.com/open?id=ID
-    const driveIdMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-
-    if (!driveIdMatch) {
-      toast.error("Invalid Google Drive link format. Please provide a direct file share link.");
-      return;
-    }
-
-    const driveId = driveIdMatch[1];
-    const directUrl = `https://drive.google.com/uc?id=${driveId}&export=download`;
-
-    // For Drive links, we'll just open the "New Product" form with this image pre-filled
-    // because we can't easily run AI on a cross-origin Drive URL in the browser 
-    // unless we proxy it or it's publicly readable.
-    // However, the user wants to "take it".
+    const url = window.prompt('Paste an image link (Google Drive share link, or any direct image URL):');
+    if (!url?.trim()) return;
 
     if (isVendor && !isAdmin && !isSuperAdmin && !currentVendorId) {
       toast.error(currentVendorName
@@ -714,8 +722,20 @@ useEffect(() => {
       return;
     }
 
-    navigate(`/admin/products/new?imageUrl=${encodeURIComponent(directUrl)}`);
-    toast.success("Drive image linked! Please complete product details.");
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) {
+      toast.error('Your session expired. Sign in again and retry.');
+      return;
+    }
+
+    const toastId = toast.loading('Importing image...');
+    try {
+      const imported = await importImageFromUrl(idToken, url.trim());
+      toast.success('Image saved to your store.', { id: toastId });
+      navigate(`/admin/products/new?imageUrl=${encodeURIComponent(imported.url)}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not import that image.', { id: toastId, duration: 9000 });
+    }
   };
 
   const handleUndoLastImport = async () => {
