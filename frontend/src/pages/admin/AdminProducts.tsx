@@ -5,6 +5,7 @@ import { collection, limit, onSnapshot, query, where, deleteDoc, doc, writeBatch
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { importImageFromUrl, importImages } from '../../services/imageImportApi';
+import { buildProductWorkbook, downloadWorkbook, PRODUCT_COLUMNS } from '../../utils/productSheet';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
 import toast from 'react-hot-toast';
 import ExcelJS from 'exceljs';
@@ -201,214 +202,84 @@ useEffect(() => {
     return CATEGORY_OPTIONS.includes(normalized) ? normalized : 'uncategorized';
   };
 
+  /** Shared by both exports: vendors get their own id locked in, staff do not. */
+  const sheetContext = () => {
+    const staff = isAdmin || isSuperAdmin;
+    return {
+      isStaff: staff,
+      lockedVendorId: !staff && isVendor ? (currentVendorId || '') : undefined,
+    };
+  };
+
   const handleExportExcel = async () => {
     try {
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('Products');
-      const vendorDefault = isVendor && !isAdmin && !isSuperAdmin ? (currentVendorId || '') : '';
+      const { isStaff, lockedVendorId } = sheetContext();
 
-      sheet.columns = [
-        { header: 'ID', key: 'id', width: 18 },
-        { header: 'Title', key: 'title', width: 28 },
-        { header: 'Brand', key: 'brand', width: 22 },
-        { header: 'Price', key: 'price', width: 12 },
-        { header: 'Fees %', key: 'fees', width: 10 },
-        { header: 'OldPrice', key: 'oldPrice', width: 12 },
-        { header: 'Description', key: 'description', width: 42 },
-        { header: 'Category', key: 'category', width: 18 },
-        { header: 'VendorID', key: 'vendorId', width: 20, hidden: true },
-        { header: 'ImageURL', key: 'imageUrl', width: 36 },
-        { header: 'Stock', key: 'stock', width: 10 },
-        { header: 'Featured', key: 'featured', width: 12 },
-        { header: 'Rating', key: 'rating', width: 10 },
-        { header: 'Reviews', key: 'reviews', width: 10 }
-      ];
-
-      products.forEach((p) => {
-        sheet.addRow({
+      const workbook = await buildProductWorkbook({
+        sheetName: 'Products',
+        title: 'Product export',
+        categories: CATEGORY_OPTIONS,
+        isStaff,
+        lockedVendorId,
+        rows: products.map((p) => ({
           id: String(p.id || ''),
           title: p.title || '',
           brand: p.brand || '',
           price: Number(p.price || 0),
-          fees: Number(p.feePercentage || 0),
           oldPrice: p.oldPrice ?? '',
           description: p.description || '',
           category: normalizeCategory(p.categoryId),
-          vendorId: vendorDefault || (p.vendorId || ''),
           imageUrl: p.image || '',
           stock: Number(p.stock || 0),
           featured: p.featured ? 'Yes' : 'No',
+          vendorId: lockedVendorId || p.vendorId || '',
+          fees: Number(p.feePercentage || 0),
           rating: Number(p.rating || 0),
-          reviews: Number(p.reviews || 0)
-        });
+          reviews: Number(p.reviews || 0),
+        })),
       });
 
-      const lookupSheet = workbook.addWorksheet('_lists');
-      lookupSheet.state = 'veryHidden';
-      lookupSheet.getCell('A1').value = 'Categories';
-      CATEGORY_OPTIONS.forEach((category, index) => {
-        lookupSheet.getCell(`A${index + 2}`).value = category;
-      });
-
-      const maxRows = Math.max(1000, sheet.rowCount + 200);
-      for (let row = 2; row <= maxRows; row++) {
-        sheet.getCell(`H${row}`).dataValidation = {
-          type: 'list',
-          allowBlank: false,
-          formulae: [`'_lists'!$A$2:$A$${CATEGORY_OPTIONS.length + 1}`],
-          showErrorMessage: true,
-          errorTitle: 'Invalid category',
-          error: 'Choose a value from the dropdown list.'
-        };
-
-        if (vendorDefault) {
-          sheet.getCell(`I${row}`).value = vendorDefault;
-        }
-        sheet.getCell(`I${row}`).protection = { locked: true };
-      }
-
-      for (let row = 2; row <= maxRows; row++) {
-        ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N'].forEach((col) => {
-          sheet.getCell(`${col}${row}`).protection = { locked: false };
-        });
-      }
-
-      await sheet.protect('trendit-export', {
-        selectLockedCells: true,
-        selectUnlockedCells: true,
-        formatCells: false,
-        formatColumns: false,
-        formatRows: false,
-        insertColumns: false,
-        insertRows: false,
-        deleteColumns: false,
-        deleteRows: false,
-        sort: false,
-        autoFilter: false,
-        pivotTables: false
-      });
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer as ArrayBuffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `trendit_products_export_${new Date().toISOString().split('T')[0]}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-
-      toast.success('Excel exported successfully!');
+      await downloadWorkbook(workbook, `trendit_products_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast.success('Products exported.');
     } catch (error) {
       console.error('Export error:', error);
-      toast.error('Failed to export Excel file.');
+      toast.error('Failed to export products. Please try again.');
     }
   };
 
   const handleExportTemplate = async () => {
     try {
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('Products Template');
-      const categories = CATEGORY_OPTIONS;
-      const vendorDefault = isVendor && !isAdmin && !isSuperAdmin ? (currentVendorId || '') : 'vendor-id';
+      const { isStaff, lockedVendorId } = sheetContext();
+      const exampleCategory = CATEGORY_OPTIONS[0] || 'uncategorized';
 
-      sheet.columns = [
-        { header: 'ID', key: 'id', width: 18 },
-        { header: 'Title', key: 'title', width: 28 },
-        { header: 'Brand', key: 'brand', width: 22 },
-        { header: 'Price', key: 'price', width: 12 },
-        { header: 'Fees %', key: 'fees', width: 10 },
-        { header: 'OldPrice', key: 'oldPrice', width: 12 },
-        { header: 'Description', key: 'description', width: 42 },
-        { header: 'Category', key: 'category', width: 18 },
-        { header: 'VendorID', key: 'vendorId', width: 20, hidden: true },
-        { header: 'ImageURL', key: 'imageUrl', width: 36 },
-        { header: 'Stock', key: 'stock', width: 10 },
-        { header: 'Featured', key: 'featured', width: 12 },
-        { header: 'Rating', key: 'rating', width: 10 },
-        { header: 'Reviews', key: 'reviews', width: 10 }
-      ];
-
-      sheet.addRow({
-        id: 'product-001',
-        title: 'Sample Product',
-        brand: 'Sample Brand',
-        price: 49.99,
-        fees: 0,
-        oldPrice: '',
-        description: 'Short product description',
-        category: 'electronics',
-        vendorId: vendorDefault,
-        imageUrl: 'https://example.com/image.jpg',
-        stock: 25,
-        featured: 'No',
-        rating: 0,
-        reviews: 0
+      const workbook = await buildProductWorkbook({
+        sheetName: 'Products',
+        title: 'Product upload template',
+        categories: CATEGORY_OPTIONS,
+        isStaff,
+        lockedVendorId,
+        // One worked example, clearly labelled, showing the exact shape of each
+        // field. Vendors delete this row and type their own underneath.
+        rows: [{
+          id: '',
+          title: 'EXAMPLE — delete this row',
+          brand: 'JBL',
+          price: 62,
+          oldPrice: 91,
+          description: 'Wireless over-ear headphones, Bluetooth 5.3, 76 hour battery, foldable.',
+          category: exampleCategory,
+          imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
+          stock: 25,
+          featured: 'No',
+          vendorId: lockedVendorId || '',
+          fees: '',
+          rating: '',
+          reviews: '',
+        }],
       });
 
-      // Hidden lookup sheet for Excel dropdown values
-      const lookupSheet = workbook.addWorksheet('_lists');
-      lookupSheet.state = 'veryHidden';
-      lookupSheet.getCell('A1').value = 'Categories';
-      categories.forEach((category, index) => {
-        lookupSheet.getCell(`A${index + 2}`).value = category;
-      });
-
-      // Category dropdown validation for common bulk range
-      for (let row = 2; row <= 1000; row++) {
-        sheet.getCell(`H${row}`).dataValidation = {
-          type: 'list',
-          allowBlank: false,
-          formulae: [`'_lists'!$A$2:$A$${categories.length + 1}`],
-          showErrorMessage: true,
-          errorTitle: 'Invalid category',
-          error: 'Choose a value from the dropdown list.'
-        };
-
-        // Keep vendor id hidden and prefilled for safer imports
-        sheet.getCell(`I${row}`).value = vendorDefault;
-        sheet.getCell(`I${row}`).protection = { locked: true };
-      }
-
-      // Unlock editable cells and protect sheet to reduce accidental edits
-      for (let row = 2; row <= 1000; row++) {
-        ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N'].forEach((col) => {
-          sheet.getCell(`${col}${row}`).protection = { locked: false };
-        });
-      }
-
-      await sheet.protect('trendit-template', {
-        selectLockedCells: true,
-        selectUnlockedCells: true,
-        formatCells: false,
-        formatColumns: false,
-        formatRows: false,
-        insertColumns: false,
-        insertRows: false,
-        deleteColumns: false,
-        deleteRows: false,
-        sort: false,
-        autoFilter: false,
-        pivotTables: false
-      });
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer as ArrayBuffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'trendit_products_import_template.xlsx';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-
-      toast.success('Template exported successfully!');
+      await downloadWorkbook(workbook, 'trendit_product_upload_template.xlsx');
+      toast.success('Template downloaded.');
     } catch (error) {
       console.error('Template export error:', error);
       toast.error('Failed to generate template. Please try again.');
@@ -466,9 +337,19 @@ useEffect(() => {
           Reviews?: number;
         }
 
+        // Header spellings drift — "ImageURL", "Image URL", "image url" are all
+        // the same field, and vendors retype headers. Compare on letters and
+        // digits only so none of that matters.
+        const headerKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
         const firstValue = (row: ExcelProductRow, keys: string[]) => {
+          const normalized = new Map<string, unknown>();
+          for (const [rawKey, value] of Object.entries(row)) {
+            const key = headerKey(rawKey);
+            if (!normalized.has(key)) normalized.set(key, value);
+          }
           for (const key of keys) {
-            const value = row[key];
+            const value = row[key] ?? normalized.get(headerKey(key));
             if (value !== undefined && value !== null && String(value).trim() !== '') {
               return value;
             }
@@ -492,14 +373,35 @@ useEffect(() => {
           return raw;
         };
 
+        // The template puts a banner and a hint line above the headers, so the
+        // header row is not necessarily row 1. Find it by looking for a column
+        // name we know, which also keeps older sheets importable.
+        const knownHeaders = new Set(
+          PRODUCT_COLUMNS.map(c => c.header.toLowerCase()).concat(['title', 'imageurl', 'image url', 'vendorid']),
+        );
+        const cleanHeader = (value: unknown) =>
+          String(value ?? '').replace(/\*/g, '').trim(); // required columns are labelled "Title *"
+
+        let headerRowNumber = 1;
+        for (let candidate = 1; candidate <= Math.min(12, ws.rowCount); candidate++) {
+          const values: string[] = [];
+          ws.getRow(candidate).eachCell({ includeEmpty: false }, cell => {
+            values.push(cleanHeader(cellValue(cell.value)).toLowerCase());
+          });
+          if (values.some(v => knownHeaders.has(v))) {
+            headerRowNumber = candidate;
+            break;
+          }
+        }
+
         const headers: string[] = [];
-        ws.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
-          headers[col] = String(cellValue(cell.value) ?? '').trim();
+        ws.getRow(headerRowNumber).eachCell({ includeEmpty: true }, (cell, col) => {
+          headers[col] = cleanHeader(cellValue(cell.value));
         });
 
         const data: ExcelProductRow[] = [];
         ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-          if (rowNumber === 1) return; // header
+          if (rowNumber <= headerRowNumber) return; // banner, hint and header rows
           const entry: ExcelProductRow = {};
           row.eachCell({ includeEmpty: false }, (cell, col) => {
             const key = headers[col];
@@ -521,8 +423,8 @@ useEffect(() => {
           const title = firstValue(row, ['Title', 'title']);
           const brand = firstValue(row, ['Brand', 'brand']);
           const desc = firstValue(row, ['Description', 'description']);
-          const image = firstValue(row, ['ImageURL', 'imageUrl', 'Image']);
-          const priceVal = firstValue(row, ['Price', 'price']);
+          const image = firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']);
+          const priceVal = firstValue(row, ['Price (USD)', 'Price', 'price']);
           const priceNumber = priceVal ? Number(priceVal) : 0;
           return Boolean(title || brand || desc || image || priceNumber > 0);
         };
@@ -539,7 +441,7 @@ useEffect(() => {
         // any product. Listings then point at a file we control, instead of
         // hotlinking a vendor's Drive — which breaks the moment they move it.
         const sourceUrls = filteredData
-          .map(row => String(firstValue(row, ['ImageURL', 'Image Url', 'imageUrl', 'Image']) ?? '').trim())
+          .map(row => String(firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']) ?? '').trim())
           .filter(Boolean);
 
         const imageResults = new Map<string, { url?: string; error?: string }>();
@@ -583,22 +485,22 @@ useEffect(() => {
           const importedId = firstValue(row, ['ID', 'Id', 'id', 'ProductID', 'Product ID']);
           const productId = importedId ? String(importedId).trim() : doc(collection(db, 'products')).id;
           const productRef = doc(db, 'products', String(productId));
-          const importedVendorId = firstValue(row, ['VendorID', 'Vendor Id', 'vendorId', 'vendor_id']);
+          const importedVendorId = firstValue(row, ['Vendor ID', 'VendorID', 'vendorId', 'vendor_id']);
           const resolvedVendorId = isVendor && !isAdmin && !isSuperAdmin
             ? (currentVendorId || '')
             : (importedVendorId ? String(importedVendorId).trim() : '');
           const importedCategory = firstValue(row, ['Category', 'category', 'CategoryID', 'Category Id']);
           const importedFeatured = firstValue(row, ['Featured', 'featured']);
           const importedFee = firstValue(row, ['Fees %', 'Fees', 'Fee %', 'feePercentage']);
-          const importedPrice = firstValue(row, ['Price', 'price']);
+          const importedPrice = firstValue(row, ['Price (USD)', 'Price', 'price']);
           const importedStock = firstValue(row, ['Stock', 'stock']);
           const importedRating = firstValue(row, ['Rating', 'rating']);
           const importedReviews = firstValue(row, ['Reviews', 'reviews']);
           const importedTitle = firstValue(row, ['Title', 'title']);
           const importedBrand = firstValue(row, ['Brand', 'brand']);
-          const importedOldPrice = firstValue(row, ['OldPrice', 'Old Price', 'oldPrice']);
+          const importedOldPrice = firstValue(row, ['Old Price', 'OldPrice', 'oldPrice']);
           const importedDescription = firstValue(row, ['Description', 'description']);
-          const importedImage = firstValue(row, ['ImageURL', 'Image Url', 'imageUrl', 'Image']);
+          const importedImage = firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']);
 
           // Only ever a URL in our own bucket. A link that failed to import is
           // dropped rather than stored, so a listing can never end up pointing
