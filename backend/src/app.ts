@@ -7,6 +7,7 @@ import { twoFactorRouter } from './routes/twoFactor.js';
 import { signupRouter } from './routes/signup.js';
 import { ordersRouter } from './routes/orders.js';
 import { importImageRouter } from './routes/importImage.js';
+import { vendorInviteRouter } from './routes/vendorInvite.js';
 import { rateLimit } from './rateLimit.js';
 import { requireAuth } from './requireAuth.js';
 
@@ -36,3 +37,7 @@ app.use('/api/orders', rateLimit({ windowMs: 60_000, max: 15, name: 'orders' }),
 // rate limited: it makes outbound requests on the caller's behalf, so it must
 // never be reachable by an anonymous visitor.
 app.use('/api/images', rateLimit({ windowMs: 60_000, max: 60, name: 'images' }), requireAuth({ staffOnly: true }), importImageRouter);
+// Vendor onboarding. Auth and throttling are applied per route inside the
+// router: creating an invite is admin-only, while the vendor-facing steps are
+// authenticated by the single-use invite token itself.
+app.use('/api/vendors', vendorInviteRouter);

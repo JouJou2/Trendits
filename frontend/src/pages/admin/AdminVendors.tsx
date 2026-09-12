@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ShieldCheck, Search, Filter, Store, ChevronDown, TrendingUp, Database, ExternalLink, BadgeCheck, Check, X } from 'lucide-react';
+import { ShieldCheck, Search, Filter, Store, ChevronDown, TrendingUp, Database, ExternalLink, BadgeCheck, Check, X, UserPlus } from 'lucide-react';
 import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../../services/firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
+import { createVendorInvite, buildInviteUrl } from '../../services/vendorInviteApi';
 import { Vendor } from '../../data/products';
 import { toast } from 'react-hot-toast';
 
@@ -14,6 +15,32 @@ const [statusFilter, setStatusFilter] = useState('All');
 const [openStatusDropdown, setOpenStatusDropdown] = useState<string | null>(null);
 const [verificationRequests, setVerificationRequests] = useState<any[]>([]);
 const [decidingRequestId, setDecidingRequestId] = useState<string | null>(null);
+
+// Vendor invite dialog. The raw token comes back from the server exactly once,
+// so it is held in state only until the admin closes the dialog.
+const [inviteOpen, setInviteOpen] = useState(false);
+const [inviteEmail, setInviteEmail] = useState('');
+const [inviteStore, setInviteStore] = useState('');
+const [inviteLink, setInviteLink] = useState('');
+const [inviteBusy, setInviteBusy] = useState(false);
+const [inviteError, setInviteError] = useState('');
+
+const handleCreateInvite = async () => {
+  setInviteBusy(true);
+  setInviteError('');
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) throw new Error('Your session expired. Sign in again.');
+    const invite = await createVendorInvite(idToken, inviteEmail.trim(), inviteStore.trim());
+    setInviteLink(buildInviteUrl(invite.token));
+    setInviteEmail('');
+    setInviteStore('');
+  } catch (err) {
+    setInviteError(err instanceof Error ? err.message : 'Could not create the invite.');
+  } finally {
+    setInviteBusy(false);
+  }
+};
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'vendors'), (snapshot) => {
@@ -80,12 +107,100 @@ const [decidingRequestId, setDecidingRequestId] = useState<string | null>(null);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-end">
+      <div className="flex justify-between items-end gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 font-display tracking-tight">Vendors & Sellers</h1>
+          <h1 className="text-2xl font-bold text-slate-900 font-display tracking-tight">Vendors &amp; Sellers</h1>
           <p className="text-slate-500 text-sm mt-1">Manage the marketplace sellers, commissions, and approvals.</p>
         </div>
+        <button
+          onClick={() => { setInviteOpen(true); setInviteLink(''); setInviteError(''); }}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold flex items-center gap-2 transition-colors active:scale-95"
+        >
+          <UserPlus className="w-4 h-4" /> Invite vendor
+        </button>
       </div>
+
+      {inviteOpen && (
+        <div className="fixed inset-0 z-[120] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-5">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-7 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-display text-lg font-bold text-slate-900">Invite a vendor</h2>
+                <p className="text-sm text-slate-500 mt-1 leading-relaxed">
+                  We create their store login, then you send them a one-time setup link.
+                  They choose their own password — you never see it.
+                </p>
+              </div>
+              <button onClick={() => setInviteOpen(false)} className="text-slate-400 hover:text-slate-600 shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!inviteLink ? (
+              <>
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mt-6 mb-2">
+                  Store login email
+                </label>
+                <input
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="store@example.com"
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                />
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mt-4 mb-2">
+                  Store name <span className="text-slate-300 normal-case font-medium">(optional)</span>
+                </label>
+                <input
+                  value={inviteStore}
+                  onChange={(e) => setInviteStore(e.target.value)}
+                  placeholder="Prefills their setup form"
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                />
+
+                {inviteError && (
+                  <p className="text-xs text-rose-600 mt-3">{inviteError}</p>
+                )}
+
+                <button
+                  onClick={handleCreateInvite}
+                  disabled={inviteBusy || !inviteEmail.trim()}
+                  className="mt-6 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold py-3 rounded-xl transition-colors"
+                >
+                  {inviteBusy ? 'Creating...' : 'Create setup link'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="mt-6 bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <p className="text-sm font-semibold text-emerald-800">Setup link ready</p>
+                  <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
+                    Send this to the vendor. It works once and expires in 7 days.
+                    We can&apos;t show it again after you close this.
+                  </p>
+                </div>
+                <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3 break-all text-xs font-mono text-slate-700">
+                  {inviteLink}
+                </div>
+                <div className="flex gap-2.5 mt-4">
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(inviteLink); toast.success('Link copied.'); }}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-colors"
+                  >
+                    Copy link
+                  </button>
+                  <button
+                    onClick={() => setInviteOpen(false)}
+                    className="px-5 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex gap-4">

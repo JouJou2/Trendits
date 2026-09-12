@@ -7,6 +7,7 @@ import { Product } from './pages/Product';
 import { Category } from './pages/Category';
 import { Login } from './pages/Login';
 import { AuthAction } from './pages/AuthAction';
+import { VendorSetup } from './pages/VendorSetup';
 import { Account } from './pages/Account';
 import { OrderDetail } from './pages/OrderDetail';
 import { Favorites } from './pages/Favorites';
@@ -113,6 +114,10 @@ export default function App() {
                 {/* Firebase email action links (password reset, email verification)
                     land here instead of Firebase's generic page. */}
                 <Route path="/auth/action" element={<StorefrontLayout><AuthAction /></StorefrontLayout>} />
+                {/* Vendor onboarding from an admin invite. Deliberately outside
+                    StorefrontLayout: it is a full-screen wizard, and the vendor
+                    is not signed in until the final step completes. */}
+                <Route path="/vendor/setup" element={<VendorSetup />} />
                 <Route path="/account" element={<StorefrontLayout><Account /></StorefrontLayout>} />
                 <Route path="/account/orders/:orderId" element={<StorefrontLayout><OrderDetail /></StorefrontLayout>} />
                 <Route path="/favorites" element={<StorefrontLayout><Favorites /></StorefrontLayout>} />

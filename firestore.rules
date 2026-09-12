@@ -478,6 +478,18 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
+    // VENDOR INVITES — server only, never readable by a client
+    // -------------------------------------------------------------------------
+
+    // These documents hold the hash of a token that can set a password on a real
+    // account. The catch-all above already denies them; this states it outright
+    // so a later broad rule cannot expose them by accident. All access is via
+    // the Admin SDK in backend/src/routes/vendorInvite.ts.
+    match /vendorInvites/{inviteId} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
     // PAYOUT RECORDS (manual vendor payout ledger)
     // -------------------------------------------------------------------------
 
