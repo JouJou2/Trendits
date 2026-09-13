@@ -6,6 +6,9 @@ import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { importImageFromUrl, importImages } from '../../services/imageImportApi';
 import { buildProductWorkbook, downloadWorkbook, PRODUCT_COLUMNS } from '../../utils/productSheet';
+import { planImport, productsToRows, toSheetRow, type ImportPlan } from '../../utils/productImport';
+import { type CategoryRecord, categoryOptions, productInCategory } from '../../utils/categories';
+import { commissionRateOf, fetchVendorCommission } from '../../utils/commission';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
 import toast from 'react-hot-toast';
 import ExcelJS from 'exceljs';
@@ -62,14 +65,19 @@ export const AdminProducts = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   // ── NEW: Dynamic categories ──
-const [categories, setCategories] = useState<{id: string; name: string; slug: string}[]>([]);
+const [categories, setCategories] = useState<CategoryRecord[]>([]);
+// Outcome of the last spreadsheet import, shown in a dialog so a vendor can see
+// exactly which rows failed and why.
+const [importReport, setImportReport] = useState<(ImportPlan & { created: number; updated: number; failedBatches: string[] }) | null>(null);
 
 useEffect(() => {
   const unsub = onSnapshot(collection(db, 'categories'), (snap) => {
     setCategories(snap.docs.map(d => ({
       id: d.id,
       name: d.data().name || d.id,
-      slug: d.data().slug || d.id
+      slug: d.data().slug || d.id,
+      parentId: d.data().parentId ?? null,
+      variantTypes: d.data().variantTypes || [],
     })));
   });
   return () => unsub();
@@ -191,54 +199,35 @@ useEffect(() => {
   const filteredProducts = products.filter(p => {
     const matchesSearch = (p.title || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (p.brand || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || p.categoryId === selectedCategory;
+    const matchesCategory = selectedCategory === 'All' || productInCategory(p.categoryId, selectedCategory, categories);
     return matchesSearch && matchesCategory;
   });
 
-  const CATEGORY_OPTIONS = categories.map(c => c.slug);
-
-  const normalizeCategory = (value: unknown): string => {
-    const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
-    return CATEGORY_OPTIONS.includes(normalized) ? normalized : 'uncategorized';
-  };
-
-  /** Shared by both exports: vendors get their own id locked in, staff do not. */
-  const sheetContext = () => {
+  /** Shared by both exports: vendors get their own id and commission locked in. */
+  const sheetContext = async () => {
     const staff = isAdmin || isSuperAdmin;
+    const lockedVendorId = !staff && isVendor ? (currentVendorId || '') : undefined;
     return {
       isStaff: staff,
-      lockedVendorId: !staff && isVendor ? (currentVendorId || '') : undefined,
+      lockedVendorId,
+      lockedCommission: lockedVendorId ? await fetchVendorCommission(lockedVendorId) : undefined,
+      categoryChoices: categoryOptions(categories).map(o => ({ slug: o.slug, label: o.label })),
     };
   };
 
   const handleExportExcel = async () => {
     try {
-      const { isStaff, lockedVendorId } = sheetContext();
-
+      const { isStaff, lockedVendorId, lockedCommission, categoryChoices } = await sheetContext();
       const workbook = await buildProductWorkbook({
         sheetName: 'Products',
         title: 'Product export',
-        categories: CATEGORY_OPTIONS,
+        categories: categoryChoices,
         isStaff,
         lockedVendorId,
-        rows: products.map((p) => ({
-          id: String(p.id || ''),
-          title: p.title || '',
-          brand: p.brand || '',
-          price: Number(p.price || 0),
-          oldPrice: p.oldPrice ?? '',
-          description: p.description || '',
-          category: normalizeCategory(p.categoryId),
-          imageUrl: p.image || '',
-          stock: Number(p.stock || 0),
-          featured: p.featured ? 'Yes' : 'No',
-          vendorId: lockedVendorId || p.vendorId || '',
-          fees: Number(p.feePercentage || 0),
-          rating: Number(p.rating || 0),
-          reviews: Number(p.reviews || 0),
-        })),
+        lockedCommission,
+        // One row per size, colour listings grouped — imports straight back.
+        rows: productsToRows(products, categories, lockedVendorId),
       });
-
       await downloadWorkbook(workbook, `trendit_products_${new Date().toISOString().split('T')[0]}.xlsx`);
       toast.success('Products exported.');
     } catch (error) {
@@ -249,35 +238,31 @@ useEffect(() => {
 
   const handleExportTemplate = async () => {
     try {
-      const { isStaff, lockedVendorId } = sheetContext();
-      const exampleCategory = CATEGORY_OPTIONS[0] || 'uncategorized';
+      const { isStaff, lockedVendorId, lockedCommission, categoryChoices } = await sheetContext();
+      // Worked examples showing a family with two colours and two sizes. Rows
+      // titled EXAMPLE are always skipped on import, so leaving them in is harmless.
+      const sizeCategory = categories.find(c => (c.variantTypes || []).includes('size'));
+      const exampleCategory = categoryChoices.find(o => o.slug === sizeCategory?.slug)?.label
+        || categoryChoices[0]?.label || '';
+      const fee = lockedCommission ?? 8;
+      const example = (color: string, size: string, stock: number) => ({
+        group: 'TEE-01', id: '', title: 'EXAMPLE — Cotton T-Shirt', brand: 'Your Brand',
+        color, size, price: 20, fees: isStaff ? '' : fee,
+        finalPrice: Math.round(20 * (1 + fee / 100) * 100) / 100,
+        oldPrice: '', description: 'Soft cotton tee, regular fit.', category: exampleCategory,
+        imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
+        stock, featured: 'No', vendorId: lockedVendorId || '', rating: '', reviews: '',
+      });
 
       const workbook = await buildProductWorkbook({
         sheetName: 'Products',
         title: 'Product upload template',
-        categories: CATEGORY_OPTIONS,
+        categories: categoryChoices,
         isStaff,
         lockedVendorId,
-        // One worked example, clearly labelled, showing the exact shape of each
-        // field. Vendors delete this row and type their own underneath.
-        rows: [{
-          id: '',
-          title: 'EXAMPLE — delete this row',
-          brand: 'JBL',
-          price: 62,
-          oldPrice: 91,
-          description: 'Wireless over-ear headphones, Bluetooth 5.3, 76 hour battery, foldable.',
-          category: exampleCategory,
-          imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
-          stock: 25,
-          featured: 'No',
-          vendorId: lockedVendorId || '',
-          fees: '',
-          rating: '',
-          reviews: '',
-        }],
+        lockedCommission,
+        rows: [example('Black', 'M', 5), example('Black', 'L', 3), example('White', 'M', 4)],
       });
-
       await downloadWorkbook(workbook, 'trendit_product_upload_template.xlsx');
       toast.success('Template downloaded.');
     } catch (error) {
@@ -337,26 +322,8 @@ useEffect(() => {
           Reviews?: number;
         }
 
-        // Header spellings drift — "ImageURL", "Image URL", "image url" are all
-        // the same field, and vendors retype headers. Compare on letters and
-        // digits only so none of that matters.
-        const headerKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-        const firstValue = (row: ExcelProductRow, keys: string[]) => {
-          const normalized = new Map<string, unknown>();
-          for (const [rawKey, value] of Object.entries(row)) {
-            const key = headerKey(rawKey);
-            if (!normalized.has(key)) normalized.set(key, value);
-          }
-          for (const key of keys) {
-            const value = row[key] ?? normalized.get(headerKey(key));
-            if (value !== undefined && value !== null && String(value).trim() !== '') {
-              return value;
-            }
-          }
-          return undefined;
-        };
-
+        // Header spellings ("Image URL", "ImageURL", "image url") are matched
+        // loosely in toSheetRow, so this only needs to collect header → value.
         // ExcelJS hands back cells, not plain rows, so rebuild the header-keyed
         // objects the rest of this importer expects (what sheet_to_json gave us).
         // A cell's value can be a formula/hyperlink/rich-text wrapper, so unwrap
@@ -400,6 +367,7 @@ useEffect(() => {
         });
 
         const data: ExcelProductRow[] = [];
+        const rowNumbers: number[] = [];
         ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
           if (rowNumber <= headerRowNumber) return; // banner, hint and header rows
           const entry: ExcelProductRow = {};
@@ -411,7 +379,7 @@ useEffect(() => {
             const value = cellValue(cell.value);
             if (value !== undefined) entry[key] = value;
           });
-          if (Object.keys(entry).length > 0) data.push(entry);
+          if (Object.keys(entry).length > 0) { data.push(entry); rowNumbers.push(rowNumber); }
         });
 
         if (data.length === 0) {
@@ -419,31 +387,22 @@ useEffect(() => {
           return;
         }
 
-        const isMeaningfulRow = (row: ExcelProductRow) => {
-          const title = firstValue(row, ['Title', 'title']);
-          const brand = firstValue(row, ['Brand', 'brand']);
-          const desc = firstValue(row, ['Description', 'description']);
-          const image = firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']);
-          const priceVal = firstValue(row, ['Price (USD)', 'Price', 'price']);
-          const priceNumber = priceVal ? Number(priceVal) : 0;
-          return Boolean(title || brand || desc || image || priceNumber > 0);
-        };
+        const sheetRows = data.map((record, i) => toSheetRow(record, rowNumbers[i]));
+        const staff = isAdmin || isSuperAdmin;
+        const lockedVendorId = staff ? undefined : (currentVendorId || '');
 
-        // Filter out the many prefilled template rows which only contain VendorID
-        const filteredData = data.filter(isMeaningfulRow);
-
-        if (filteredData.length === 0) {
-          toast.error('No product rows found to import. Ensure at least one row has a title, brand, image, or price.');
-          return;
+        // Commission per store, read from the vendor documents the rules check
+        // new products against.
+        const commissionByVendor: Record<string, number> = {};
+        if (lockedVendorId) {
+          commissionByVendor[lockedVendorId] = await fetchVendorCommission(lockedVendorId);
+        } else {
+          for (const vend of vendors) commissionByVendor[String(vend.id)] = commissionRateOf(vend);
         }
 
         // Copy every referenced image into our own Storage bucket before writing
-        // any product. Listings then point at a file we control, instead of
-        // hotlinking a vendor's Drive — which breaks the moment they move it.
-        const sourceUrls = filteredData
-          .map(row => String(firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']) ?? '').trim())
-          .filter(Boolean);
-
+        // any product, so listings point at files we control.
+        const sourceUrls = [...new Set(sheetRows.map(r => r.imageUrl).filter(Boolean))];
         const imageResults = new Map<string, { url?: string; error?: string }>();
 
         if (sourceUrls.length) {
@@ -452,103 +411,80 @@ useEffect(() => {
             toast.error('Your session expired. Sign in again and retry the import.');
             return;
           }
-
-          const imageToastId = toast.loading(`Importing images 0/${new Set(sourceUrls).size}...`);
+          const imageToastId = toast.loading(`Importing images 0/${sourceUrls.length}...`);
           try {
             const results = await importImages(idToken, sourceUrls, (done, total) => {
               toast.loading(`Importing images ${done}/${total}...`, { id: imageToastId });
             });
             results.forEach((value, key) => imageResults.set(key, value));
-
-            const failures = [...results.values()].filter(r => r.error);
-            if (failures.length) {
-              toast.error(
-                `${failures.length} image${failures.length === 1 ? '' : 's'} could not be imported. First problem: ${failures[0].error}`,
-                { id: imageToastId, duration: 9000 },
-              );
-            } else {
-              toast.success(`Imported ${results.size} image${results.size === 1 ? '' : 's'}.`, { id: imageToastId });
-            }
+            toast.dismiss(imageToastId);
           } catch (imageError) {
             toast.dismiss(imageToastId);
             console.error('Image import step failed:', imageError);
-            toast.error('Images could not be imported. Products will be created without them.');
           }
         }
 
-        const batch = writeBatch(db);
-        let count = 0;
-        const importedIds: string[] = [];
-
-        filteredData.forEach((row) => {
-          // Preserve imported IDs when present (supports common header variants)
-          const importedId = firstValue(row, ['ID', 'Id', 'id', 'ProductID', 'Product ID']);
-          const productId = importedId ? String(importedId).trim() : doc(collection(db, 'products')).id;
-          const productRef = doc(db, 'products', String(productId));
-          const importedVendorId = firstValue(row, ['Vendor ID', 'VendorID', 'vendorId', 'vendor_id']);
-          const resolvedVendorId = isVendor && !isAdmin && !isSuperAdmin
-            ? (currentVendorId || '')
-            : (importedVendorId ? String(importedVendorId).trim() : '');
-          const importedCategory = firstValue(row, ['Category', 'category', 'CategoryID', 'Category Id']);
-          const importedFeatured = firstValue(row, ['Featured', 'featured']);
-          const importedFee = firstValue(row, ['Fees %', 'Fees', 'Fee %', 'feePercentage']);
-          const importedPrice = firstValue(row, ['Price (USD)', 'Price', 'price']);
-          const importedStock = firstValue(row, ['Stock', 'stock']);
-          const importedRating = firstValue(row, ['Rating', 'rating']);
-          const importedReviews = firstValue(row, ['Reviews', 'reviews']);
-          const importedTitle = firstValue(row, ['Title', 'title']);
-          const importedBrand = firstValue(row, ['Brand', 'brand']);
-          const importedOldPrice = firstValue(row, ['Old Price', 'OldPrice', 'oldPrice']);
-          const importedDescription = firstValue(row, ['Description', 'description']);
-          const importedImage = firstValue(row, ['Image URL', 'ImageURL', 'imageUrl', 'Image']);
-
-          // Only ever a URL in our own bucket. A link that failed to import is
-          // dropped rather than stored, so a listing can never end up pointing
-          // at a third-party host we do not control.
-          const storedImage = importedImage
-            ? imageResults.get(String(importedImage).trim())?.url ?? ''
-            : '';
-
-          const isFeatured = ['yes', 'true', '1'].includes(String(importedFeatured || '').trim().toLowerCase());
-
-          const productData = {
-            id: String(productId),
-            title: importedTitle ? String(importedTitle) : 'Untitled Product',
-            brand: importedBrand ? String(importedBrand) : '',
-            price: Number(importedPrice) || 0,
-            feePercentage: Number(importedFee) || 0,
-            oldPrice: importedOldPrice ? Number(importedOldPrice) : null,
-            description: importedDescription ? String(importedDescription) : '',
-            categoryId: normalizeCategory(importedCategory),
-            vendorId: resolvedVendorId,
-            image: storedImage,
-            images: storedImage ? [storedImage] : [],
-            stock: Number(importedStock) || 0,
-            featured: isFeatured,
-            rating: Number(importedRating) || 0,
-            reviews: Number(importedReviews) || 0,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-
-          batch.set(productRef, productData);
-          importedIds.push(String(productId));
-          count++;
+        const plan = planImport(sheetRows, {
+          categories,
+          existingProducts: products.map(pr => ({ id: String(pr.id), variantGroupId: pr.variantGroupId })),
+          isStaff: staff,
+          lockedVendorId,
+          commissionByVendor,
+          storedImage: url => (url ? imageResults.get(url)?.url ?? '' : ''),
+          newId: () => doc(collection(db, 'products')).id,
+          now: new Date().toISOString(),
         });
 
-        await batch.commit();
-        // persist last import ids to localStorage for reliable undo
-        try {
-          localStorage.setItem('trendit_last_import', JSON.stringify({ ids: importedIds, ts: new Date().toISOString() }));
-        } catch (e) {
-          console.warn('Could not persist last import ids', e);
+        // Per-image failures belong in the report next to the rows they affect.
+        const imageFailures = [...imageResults.entries()].filter(([, r]) => r.error);
+        if (imageFailures.length) {
+          plan.warnings.unshift(...imageFailures.slice(0, 20).map(([url, r]) => `Image ${url.slice(0, 60)}${url.length > 60 ? '…' : ''}: ${r.error}`));
         }
 
-        toast.success(`Imported ${count} products successfully!`);
-        e.target.value = ''; // Reset input
+        // Merge rather than overwrite, so an update keeps fields the sheet does
+        // not carry (gallery photos, specs, real ratings, creation date). Chunked
+        // because a Firestore batch holds at most 500 writes.
+        const CHUNK = 400;
+        let created = 0;
+        let updated = 0;
+        const createdIds: string[] = [];
+        const failedBatches: string[] = [];
+
+        for (let i = 0; i < plan.writes.length; i += CHUNK) {
+          const chunk = plan.writes.slice(i, i + CHUNK);
+          const batch = writeBatch(db);
+          chunk.forEach(w => batch.set(doc(db, 'products', w.id), w.data, { merge: true }));
+          try {
+            await batch.commit();
+            chunk.forEach(w => { if (w.isNew) { created++; createdIds.push(w.id); } else { updated++; } });
+          } catch (batchError) {
+            console.error('Import batch failed:', batchError);
+            const rowsInChunk = chunk.flatMap(w => w.rows);
+            failedBatches.push(
+              `Rows ${Math.min(...rowsInChunk)}–${Math.max(...rowsInChunk)} were not saved: `
+              + (String((batchError as { code?: string }).code).includes('permission')
+                ? 'one of them refers to a product that is not yours, or to a store that is not approved yet.'
+                : 'the database refused the write. Try again in a moment.'),
+            );
+          }
+        }
+
+        // Undo removes only what this import created. It used to record every
+        // id, so undoing an import that updated live products deleted them.
+        try {
+          localStorage.setItem('trendit_last_import', JSON.stringify({ ids: createdIds, ts: new Date().toISOString() }));
+        } catch (storageError) {
+          console.warn('Could not persist last import ids', storageError);
+        }
+
+        setImportReport({ ...plan, created, updated, failedBatches });
+        if (created + updated > 0 && !plan.errors.length && !failedBatches.length) {
+          toast.success(`Import finished: ${created} created, ${updated} updated.`);
+        }
+        e.target.value = '';
       } catch (err) {
-        console.error("Import error:", err);
-        toast.error("Failed to import file. Please check the format.");
+        console.error('Import error:', err);
+        toast.error('Failed to import file. Please check the format.');
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1011,9 +947,9 @@ useEffect(() => {
   className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none outline-none cursor-pointer"
 >
   <option value="All">All Categories</option>
-  {categories.map(cat => (
-    <option key={cat.id} value={cat.slug}>
-      {cat.name}
+  {categoryOptions(categories).map(opt => (
+    <option key={opt.slug} value={opt.slug}>
+      {opt.label}
     </option>
   ))}
 </select>
@@ -1149,6 +1085,57 @@ useEffect(() => {
           </table>
         </div>
       </div>
+
+      {importReport && (
+        <div className="fixed inset-0 z-[120] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-5">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-xl">
+            <div className="p-6 border-b border-slate-100 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-display text-lg font-bold text-slate-900">Import results</h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-semibold text-emerald-700">{importReport.created} created</span>
+                  {' · '}
+                  <span className="font-semibold text-blue-700">{importReport.updated} updated</span>
+                  {importReport.errors.length > 0 && <>{' · '}<span className="font-semibold text-rose-700">{importReport.errors.length} rows skipped</span></>}
+                </p>
+              </div>
+              <button onClick={() => setImportReport(null)} className="text-slate-400 hover:text-slate-600 shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-5">
+              {[...importReport.failedBatches, ...importReport.errors].length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-rose-600 mb-2">Not imported — fix these rows and import again</p>
+                  <ul className="space-y-1.5">
+                    {[...importReport.failedBatches, ...importReport.errors].map((msg, i) => (
+                      <li key={i} className="text-sm text-slate-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">{msg}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {importReport.warnings.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-2">Imported, with notes</p>
+                  <ul className="space-y-1.5">
+                    {importReport.warnings.map((msg, i) => (
+                      <li key={i} className="text-sm text-slate-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">{msg}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {importReport.errors.length === 0 && importReport.warnings.length === 0 && importReport.failedBatches.length === 0 && (
+                <p className="text-sm text-slate-600">Everything imported cleanly.</p>
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-100 flex justify-end">
+              <button onClick={() => setImportReport(null)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -83,8 +83,16 @@ service cloud.firestore {
 
     // A vendor may only publish under their own id — otherwise vendor A could
     // create products attributed to vendor B.
+    //
+    // The commission must also be the one Trendit set for their store. Updates
+    // already refuse any change to feePercentage (preservesPlatformFields), but
+    // creation checked nothing, so a vendor could list a product at 0% and keep
+    // it there for good. The default of 0 matches src/utils/commission.ts.
     function ownsIncomingProduct() {
-      return isActiveVendor() && incoming().get('vendorId', '') == request.auth.uid;
+      return isActiveVendor()
+        && incoming().get('vendorId', '') == request.auth.uid
+        && incoming().get('feePercentage', 0)
+           == get(/databases/$(database)/documents/vendors/$(request.auth.uid)).data.get('commissionRate', 0);
     }
 
     // feePercentage is the platform's commission and vendorId is the payout

@@ -12,6 +12,7 @@ import { ProductType, ProductVariant, variantId } from '../../data/products';
 import { toast } from 'react-hot-toast';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { categoryOptions, effectiveVariantTypes } from '../../utils/categories';
+import { fetchVendorCommission, finalPrice } from '../../utils/commission';
 
 // ── Category type ──
 type VariantType = 'size' | 'color';
@@ -177,6 +178,11 @@ const uploadImageToStorage = (
         await updateDoc(doc(db, 'products', id), { variantGroupId: groupId });
         setFormData(prev => ({ ...prev, variantGroupId: groupId }));
       }
+      // A vendor's new listing always carries their store's commission; Firestore
+      // rules refuse any other value on create.
+      const colorVariantFee = (isAdmin || isSuperAdmin)
+        ? Number(formData.feePercentage || 0)
+        : await fetchVendorCommission(formData.vendorId);
       const newProductRef = await addDoc(collection(db, 'products'), {
         title: `${colorName.toUpperCase()} - ${formData.title || ''}`,
         brand: formData.brand || '',
@@ -190,7 +196,7 @@ const uploadImageToStorage = (
         specs: formData.specs || {},
         stock: 0,
         featured: false,
-        feePercentage: formData.feePercentage || 0,
+        feePercentage: colorVariantFee,
         variantGroupId: groupId,
         variantColor: colorName,
         colors: [colorName],
@@ -298,6 +304,17 @@ setAvailableVendors(vends);
     return () => unsubAll();
   }, [isVendor, isAdmin, isSuperAdmin, user, isNew]);
 
+  // A vendor starting a new product sees their store's commission straight
+  // away, so the "Shoppers pay" preview is right before they save.
+  useEffect(() => {
+    if (!isNew || isAdmin || isSuperAdmin || !formData.vendorId) return;
+    let cancelled = false;
+    fetchVendorCommission(formData.vendorId)
+      .then(rate => { if (!cancelled) setFormData(prev => ({ ...prev, feePercentage: rate })); })
+      .catch(err => console.error('Commission lookup failed:', err));
+    return () => { cancelled = true; };
+  }, [isNew, isAdmin, isSuperAdmin, formData.vendorId]);
+
   useEffect(() => {
     if (!isNew && id) {
       const fetchProduct = async () => {
@@ -345,6 +362,11 @@ setAvailableVendors(vends);
 
       if (isNew) {
         dataToSave.createdAt = new Date().toISOString();
+        // Commission is the store's rate, set by an admin — not something a vendor
+        // types in. Without this every vendor-created product defaulted to 0%.
+        if (!isAdmin && !isSuperAdmin) {
+          dataToSave.feePercentage = await fetchVendorCommission(dataToSave.vendorId);
+        }
         const newProductRef = await addDoc(collection(db, 'products'), dataToSave);
 
         // Notify followers of this vendor that a new product dropped
@@ -629,15 +651,21 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isGaller
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Fees % (Profit)</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Trendit commission %</label>
                     <input 
                       type="number" 
                       step="0.1"
+                      min={0}
                       value={formData.feePercentage || 0}
                       onChange={(e) => setFormData({ ...formData, feePercentage: Number(e.target.value) })}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
-                      placeholder="e.g. 15"
+                      disabled={!isAdmin && !isSuperAdmin}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white disabled:text-slate-400 disabled:cursor-not-allowed"
+                      placeholder="e.g. 8"
                     />
+                    <p className="text-xs text-slate-500 mt-1.5">
+                      Shoppers pay <span className="font-semibold text-slate-700">${finalPrice(Number(formData.price) || 0, Number(formData.feePercentage) || 0).toFixed(2)}</span>
+                      {(!isAdmin && !isSuperAdmin) && <> · set by Trendit for your store</>}
+                    </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Compare at Price ($)</label>
