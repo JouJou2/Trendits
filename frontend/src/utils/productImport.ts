@@ -85,7 +85,7 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
     brand: text('Brand'),
     color: text('Color', 'Colour'),
     size: text('Size'),
-    price: toNumber(pick('Vendor Price', 'Price (USD)', 'Price', 'Original Price')),
+    price: toNumber(pick('Price', 'Vendor Price', 'Price (USD)', 'Original Price')),
     fees: toNumber(pick('Commission %', 'Commission', 'Fees %', 'Fees', 'Fee %', 'feePercentage')),
     oldPrice: toNumber(pick('Old Price', 'OldPrice', 'Compare at Price')),
     description: text('Description'),
@@ -169,8 +169,8 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
   for (const r of rows) {
     const problems: string[] = [];
     if (!r.title) problems.push('Title is empty');
-    if (r.price === null) problems.push('Vendor Price is empty or not a number');
-    else if (r.price < 0) problems.push('Vendor Price cannot be negative');
+    if (r.price === null) problems.push('Price is empty or not a number');
+    else if (r.price < 0) problems.push('Price cannot be negative');
     const categorySlug = resolveCategory(r.category, ctx.categories);
     if (!categorySlug) problems.push(r.category ? `Category "${r.category}" does not exist` : 'Category is empty');
     if (r.stock !== null && (r.stock < 0 || !Number.isInteger(r.stock))) problems.push('Stock must be a whole number, 0 or more');
@@ -362,7 +362,10 @@ export interface ExportRow {
   size: string;
   price: number | string;
   fees: number | string;
-  finalPrice: number | string;
+  /** Trendit's commission on this row's price. */
+  commissionAmount: number | string;
+  /** What the vendor receives from this row's price after commission. */
+  vendorAmount: number | string;
   oldPrice: number | string;
   description: string;
   category: string;
@@ -375,6 +378,15 @@ export interface ExportRow {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Commission comes out of the price. Same arithmetic as splitSale in
+ * utils/commission.ts, kept local so this module stays free of Firestore.
+ */
+const splitColumns = (price: number, fee: number) => {
+  const commissionAmount = round2(price * (fee > 0 ? fee : 0) / 100);
+  return { commissionAmount, vendorAmount: round2(price - commissionAmount) };
+};
 
 /**
  * One row per size (or one row for a product without sizes). Colour listings
@@ -413,11 +425,11 @@ export const productsToRows = (
       const group = base.group || String(p.id);
       for (const v of variants) {
         const price = typeof v.price === 'number' ? v.price : Number(p.price || 0);
-        rows.push({ ...base, group, size: v.size || '', price, finalPrice: round2(price * (1 + fee / 100)), stock: Number(v.stock || 0) });
+        rows.push({ ...base, group, size: v.size || '', price, ...splitColumns(price, fee), stock: Number(v.stock || 0) });
       }
     } else {
       const price = Number(p.price || 0);
-      rows.push({ ...base, size: '', price, finalPrice: round2(price * (1 + fee / 100)), stock: Number(p.stock || 0) });
+      rows.push({ ...base, size: '', price, ...splitColumns(price, fee), stock: Number(p.stock || 0) });
     }
   }
   return rows;

@@ -56,10 +56,16 @@
 
   export const variantId = (size?: string) => size || '_';
 
-export const getDisplayPrice = (price: number, feePercentage?: number) => {
-  if (!feePercentage || feePercentage <= 0) return price;
-  return price * (1 + feePercentage / 100);
-};
+/**
+ * The price shoppers see and pay: the product's price, as stored.
+ *
+ * Commission is taken out of this price, not added on top (see
+ * utils/commission.ts), so `feePercentage` no longer changes what a shopper
+ * pays. The parameter is kept so the many existing call sites need no change;
+ * backend/src/routes/orders.ts charges the same figure.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const getDisplayPrice = (price: number, _feePercentage?: number) => price;
 
 export interface Vendor {
   id: string;

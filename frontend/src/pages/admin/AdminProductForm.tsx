@@ -12,7 +12,7 @@ import { ProductType, ProductVariant, variantId } from '../../data/products';
 import { toast } from 'react-hot-toast';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { categoryOptions, effectiveVariantTypes } from '../../utils/categories';
-import { fetchVendorCommission, finalPrice } from '../../utils/commission';
+import { fetchVendorCommission, splitSale } from '../../utils/commission';
 
 // ── Category type ──
 type VariantType = 'size' | 'color';
@@ -662,10 +662,18 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isGaller
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white disabled:text-slate-400 disabled:cursor-not-allowed"
                       placeholder="e.g. 8"
                     />
-                    <p className="text-xs text-slate-500 mt-1.5">
-                      Shoppers pay <span className="font-semibold text-slate-700">${finalPrice(Number(formData.price) || 0, Number(formData.feePercentage) || 0).toFixed(2)}</span>
-                      {(!isAdmin && !isSuperAdmin) && <> · set by Trendit for your store</>}
-                    </p>
+                    {(() => {
+                      // Commission comes out of the price; the shopper pays the price as entered.
+                      const split = splitSale(Number(formData.price) || 0, Number(formData.feePercentage) || 0);
+                      return (
+                        <p className="text-xs text-slate-500 mt-1.5">
+                          Shoppers pay <span className="font-semibold text-slate-700">${(Number(formData.price) || 0).toFixed(2)}</span>
+                          {' · '}Trendit earns <span className="font-semibold text-emerald-700">${split.commission.toFixed(2)}</span>
+                          {' · '}{(!isAdmin && !isSuperAdmin) ? 'you receive' : 'vendor receives'} <span className="font-semibold text-slate-700">${split.vendorAmount.toFixed(2)}</span>
+                          {(!isAdmin && !isSuperAdmin) && <span className="block mt-0.5">Commission is set by Trendit for your store.</span>}
+                        </p>
+                      );
+                    })()}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Compare at Price ($)</label>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { ArrowUpRight, Package, ShoppingCart, TrendingUp, Users, AlertTriangle, Loader2, DollarSign, Database, Store, ArrowLeft } from 'lucide-react';
@@ -7,6 +7,7 @@ import { db } from '../../services/firebase';
 import { toast } from 'react-hot-toast';
 import { ProductType } from '../../data/products';
 import { useAuth } from '../../contexts/AuthContext';
+import { commissionRateOf, orderItemSplit } from '../../utils/commission';
 
 interface Order extends DocumentData {
   id: string;
@@ -22,6 +23,7 @@ interface Order extends DocumentData {
 export const AdminOverview = () => {
   const { user, isAdmin, isSuperAdmin, vendorId } = useAuth();
   const isAdminView = isAdmin || isSuperAdmin;
+
   const navigate = useNavigate();
 
   const [stats, setStats] = useState({
@@ -34,6 +36,35 @@ export const AdminOverview = () => {
   });
 
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
+  // Orders in view (all for an admin, their own for a vendor) and store rates,
+  // kept so the commission line under Total Revenue can be worked out from them.
+  const [scopedOrders, setScopedOrders] = useState<Order[]>([]);
+  const [vendorRates, setVendorRates] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'vendors'), (snap) => {
+      const rates: Record<string, number> = {};
+      snap.docs.forEach(d => { rates[d.id] = commissionRateOf(d.data()); });
+      setVendorRates(rates);
+    }, (err) => console.error('Vendor rates error:', err));
+    return () => unsub();
+  }, []);
+
+  // Admins see what Trendit earned; a vendor sees what they receive after commission.
+  const commissionLine = useMemo(() => {
+    let commission = 0;
+    let vendorReceives = 0;
+    for (const order of scopedOrders) {
+      for (const item of ((order as unknown as { items?: any[] }).items || [])) {
+        if (!item.vendorId) continue;
+        if (!isAdminView && item.vendorId !== vendorId) continue;
+        const split = orderItemSplit(item, vendorRates[item.vendorId] ?? 0);
+        commission += split.commission;
+        vendorReceives += split.vendorAmount;
+      }
+    }
+    return { commission, vendorReceives };
+  }, [scopedOrders, vendorRates, isAdminView, vendorId]);
   const [chartData, setChartData] = useState<{name: string, revenue: number, expenses: number}[]>([]);
   const [seeding, setSeeding] = useState(false);
   const [lowStockProduct, setLowStockProduct] = useState<ProductType | null>(null);
@@ -160,6 +191,7 @@ export const AdminOverview = () => {
           }, 0);
 
           setStats(prev => ({ ...prev, totalOrders: snap.size, totalRevenue: revenue, loading: false }));
+          setScopedOrders(orders);
 
           const sortedOrders = [...orders].slice(0, 5);
           const vendorOrders = sortedOrders.map((order) => {
@@ -273,6 +305,7 @@ export const AdminOverview = () => {
           const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
           const revenue = orders.reduce((acc, curr) => acc + (curr.finalTotal || curr.total || 0), 0);
           setStats(prev => ({ ...prev, totalOrders: snap.size, totalRevenue: revenue, loading: false }));
+          setScopedOrders(orders);
 
           const sortedOrders = [...orders].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5);
           setRecentOrders(sortedOrders);
@@ -457,10 +490,24 @@ export const AdminOverview = () => {
             </div>
           </div>
           <div className="mt-4 flex items-center text-sm">
-            <span className="flex items-center text-emerald-600 font-medium font-bold">
-              <ArrowUpRight className="w-4 h-4 mr-1" />
-              Live
-            </span>
+            {stats.loading ? (
+              <span className="text-slate-400">&nbsp;</span>
+            ) : isAdminView ? (
+              <span className="text-slate-600">
+                Trendit commission{' '}
+                <span className="font-bold text-emerald-700">
+                  ${commissionLine.commission.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </span>
+            ) : (
+              <span className="text-slate-600">
+                You receive{' '}
+                <span className="font-bold text-emerald-700">
+                  ${commissionLine.vendorReceives.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                {' '}after commission
+              </span>
+            )}
           </div>
         </div>
       </div>

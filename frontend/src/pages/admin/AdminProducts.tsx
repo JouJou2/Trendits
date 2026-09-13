@@ -248,7 +248,8 @@ useEffect(() => {
       const example = (color: string, size: string, stock: number) => ({
         group: 'TEE-01', id: '', title: 'EXAMPLE — Cotton T-Shirt', brand: 'Your Brand',
         color, size, price: 20, fees: isStaff ? '' : fee,
-        finalPrice: Math.round(20 * (1 + fee / 100) * 100) / 100,
+        commissionAmount: Math.round(20 * fee) / 100,
+        vendorAmount: Math.round((20 - Math.round(20 * fee) / 100) * 100) / 100,
         oldPrice: '', description: 'Soft cotton tee, regular fit.', category: exampleCategory,
         imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
         stock, featured: 'No', vendorId: lockedVendorId || '', rating: '', reviews: '',
@@ -738,6 +739,50 @@ useEffect(() => {
     }
   };
 
+  /**
+   * Gives products with no commission their store's rate. Commission comes out
+   * of the price, so this changes what Trendit earns per sale, never what a
+   * shopper pays. Products an admin set to a non-zero rate are left alone.
+   */
+  const handleApplyStoreCommission = async () => {
+    const rates = new Map(vendors.map(v => [String(v.id), commissionRateOf(v)]));
+    const pending = products
+      .filter(p => p.vendorId && !(Number(p.feePercentage) > 0) && (rates.get(String(p.vendorId)) || 0) > 0)
+      .map(p => ({ id: String(p.id), rate: rates.get(String(p.vendorId)) as number }));
+
+    if (pending.length === 0) {
+      toast.success('Every vendor product already has a commission.');
+      return;
+    }
+
+    const byRate = new Map<number, number>();
+    pending.forEach(p => byRate.set(p.rate, (byRate.get(p.rate) || 0) + 1));
+    const summary = [...byRate].map(([rate, count]) => `${count} at ${rate}%`).join(', ');
+    const confirmed = window.confirm(
+      `Set the store commission on ${pending.length} product${pending.length === 1 ? '' : 's'} that currently have 0% (${summary})?\n\n`
+      + 'Shelf prices do not change — the commission is taken out of the price.'
+    );
+    if (!confirmed) return;
+
+    try {
+      const chunkSize = 450;
+      let updated = 0;
+      const now = new Date().toISOString();
+      for (let index = 0; index < pending.length; index += chunkSize) {
+        const batch = writeBatch(db);
+        pending.slice(index, index + chunkSize).forEach(p => {
+          batch.update(doc(db, 'products', p.id), { feePercentage: p.rate, updatedAt: now });
+        });
+        await batch.commit();
+        updated += Math.min(chunkSize, pending.length - index);
+      }
+      toast.success(`Store commission applied to ${updated} product${updated === 1 ? '' : 's'}.`);
+    } catch (error) {
+      console.error('Apply store commission error:', error);
+      toast.error('Could not apply store commission. Make sure you are signed in as an admin.');
+    }
+  };
+
   const handleDeleteUntitledProducts = async () => {
     const untitledProducts = products.filter((product) => {
       const title = String(product.title || '').trim().toLowerCase();
@@ -823,6 +868,16 @@ useEffect(() => {
               title="Copy any product image still hosted elsewhere into your own storage"
             >
               <ImageIcon className="w-4 h-4" /> Fix external images
+            </button>
+          )}
+
+          {(isAdmin || isSuperAdmin) && (
+            <button
+              onClick={handleApplyStoreCommission}
+              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 active:scale-95"
+              title="Give products with 0% commission their store's rate. Shelf prices do not change."
+            >
+              <TrendingUp className="w-4 h-4" /> Apply store commission
             </button>
           )}
 

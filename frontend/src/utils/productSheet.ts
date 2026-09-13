@@ -51,14 +51,16 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
     note: 'Optional. Each colour becomes its own listing with its own photo, linked to the others so shoppers can switch between them. Only works in categories that use colours.' },
   { header: 'Size', key: 'size', width: 9, variant: true,
     note: 'Optional. One row per size, each with its own Stock. Only works in categories that use sizes.' },
-  { header: 'Vendor Price', key: 'price', width: 13, required: true,
-    note: 'What the product costs before Trendit\'s commission — the amount the store receives. Numbers only, no $ sign. A size can have its own price.' },
+  { header: 'Price', key: 'price', width: 11, required: true,
+    note: 'What shoppers pay on the site. Numbers only, no $ sign. A size can have its own price.' },
   { header: 'Commission %', key: 'fees', width: 14, staffOnly: true,
-    note: 'Trendit\'s commission, added on top of the Vendor Price. Set by Trendit for each store — already filled in for you.' },
-  { header: 'Final Price', key: 'finalPrice', width: 12, formula: true,
-    note: 'What shoppers pay on the site: Vendor Price plus Commission %. Calculated automatically — do not type here.' },
+    note: 'Trendit\'s commission, taken out of the Price — shoppers still pay the Price. Set by Trendit for each store, already filled in for you.' },
+  { header: 'Trendit Earns', key: 'commissionAmount', width: 13, formula: true,
+    note: 'Trendit\'s commission on each sale: Price × Commission %. Calculated automatically — do not type here.' },
+  { header: 'Vendor Receives', key: 'vendorAmount', width: 15, formula: true,
+    note: 'What the store receives from each sale: Price minus Trendit\'s commission. Calculated automatically — do not type here.' },
   { header: 'Old Price', key: 'oldPrice', width: 11,
-    note: 'Optional. The Vendor Price before a discount — shows struck through beside the new price. Leave blank if not on sale.' },
+    note: 'Optional. The Price before a discount — shows struck through beside the new price. Leave blank if not on sale.' },
   { header: 'Description', key: 'description', width: 40,
     note: 'What it is, what it fits, what is in the box. A few sentences is plenty.' },
   { header: 'Category', key: 'category', width: 24, required: true,
@@ -77,15 +79,19 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
     note: 'Number of customer reviews. Not editable.' },
 ];
 
-const colLetter = (index: number) => String.fromCharCode(65 + index); // A..R — 18 columns
+const colLetter = (index: number) => String.fromCharCode(65 + index); // A..S — 19 columns
 const indexOf = (key: keyof ExportRow) => PRODUCT_COLUMNS.findIndex(c => c.key === key);
 const letterOf = (key: keyof ExportRow) => colLetter(indexOf(key));
 
-/** Excel formula for one row's final price; blank until a Vendor Price is typed. */
-const finalPriceFormula = (row: number) => {
+/**
+ * Excel formulas for one row's commission split; blank until a Price is typed.
+ * Commission comes out of the price, matching utils/commission.ts.
+ */
+const splitFormula = (key: keyof ExportRow, row: number) => {
   const price = `${letterOf('price')}${row}`;
-  const fees = `${letterOf('fees')}${row}`;
-  return `IF(${price}="","",ROUND(${price}*(1+N(${fees})/100),2))`;
+  const commission = `ROUND(${price}*N(${letterOf('fees')}${row})/100,2)`;
+  const amount = key === 'commissionAmount' ? commission : `ROUND(${price}-${commission},2)`;
+  return `IF(${price}="","",${amount})`;
 };
 
 export interface BuildOptions {
@@ -97,7 +103,7 @@ export interface BuildOptions {
   rows: ExportRow[];
   /** When set, Vendor ID is pre-filled and locked to this store. */
   lockedVendorId?: string;
-  /** A vendor's store commission, pre-filled so Final Price is right as they type. */
+  /** A vendor's store commission, pre-filled so the split is right as they type. */
   lockedCommission?: number;
   /** Admins may edit commission and reputation columns; vendors may not. */
   isStaff: boolean;
@@ -130,7 +136,7 @@ export const buildProductWorkbook = async ({
   sheet.mergeCells(`A2:${lastCol}2`);
   const hint = sheet.getCell('A2');
   hint.value =
-    'Blue = required. Amber = sizes & colours (same Group = same product). Green = worked out for you. '
+    'Blue = required. Amber = sizes & colours (same Group = same product). Green = Trendit\'s commission and your share, worked out for you. '
     + 'Grey = set by Trendit. Hover any heading for help. Start on row 4, and see the "How to fill this in" tab.';
   hint.font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF5A6478' } };
   hint.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F9FC' } };
@@ -173,7 +179,7 @@ export const buildProductWorkbook = async ({
     PRODUCT_COLUMNS.forEach((col, colIndex) => {
       const cell = target.getCell(colIndex + 1);
       if (col.formula) {
-        cell.value = { formula: finalPriceFormula(rowNumber), result: row.finalPrice as number } as ExcelJS.CellFormulaValue;
+        cell.value = { formula: splitFormula(col.key, rowNumber), result: row[col.key] as number } as ExcelJS.CellFormulaValue;
       } else {
         cell.value = row[col.key] as ExcelJS.CellValue;
       }
@@ -239,10 +245,12 @@ export const buildProductWorkbook = async ({
       };
     }
 
-    // Blank rows still get the Final Price formula, so it fills in as they type.
+    // Blank rows still get the split formulas, so they fill in as they type.
     if (row >= FIRST_DATA_ROW + rows.length) {
-      sheet.getCell(`${letterOf('finalPrice')}${row}`).value =
-        { formula: finalPriceFormula(row), result: '' } as unknown as ExcelJS.CellFormulaValue;
+      for (const key of ['commissionAmount', 'vendorAmount'] as const) {
+        sheet.getCell(`${letterOf(key)}${row}`).value =
+          { formula: splitFormula(key, row), result: '' } as unknown as ExcelJS.CellFormulaValue;
+      }
       if (lockedVendorId) sheet.getCell(`${letterOf('vendorId')}${row}`).value = lockedVendorId;
       if (lockedCommission !== undefined) sheet.getCell(`${letterOf('fees')}${row}`).value = lockedCommission;
     }
@@ -292,19 +300,20 @@ export const buildProductWorkbook = async ({
     line('', ''),
     section('THE BASICS'),
     line('Where to type', `Go to the "${sheetName}" tab. Headers are on row ${HEADER_ROW}; start typing on row ${FIRST_DATA_ROW}.`),
-    line('Required', 'Columns marked * must be filled on every row: Title, Vendor Price, Category, Image URL, Stock.'),
+    line('Required', 'Columns marked * must be filled on every row: Title, Price, Category, Image URL, Stock.'),
     line('Locked columns', 'Grey columns are managed by Trendit. Your Vendor ID and commission are already filled in.'),
     line('', ''),
     section('PRICING'),
-    line('Vendor Price', 'The price before Trendit\'s commission — what your store receives. Digits only: 24.99, not $24,99.'),
-    line('Commission %', 'Trendit\'s commission for your store, added on top.'),
-    line('Final Price', 'Worked out for you as you type: Vendor Price + Commission %. This is exactly what shoppers pay.'),
-    line('  Example', 'Vendor Price 20, Commission 8%  →  Final Price $21.60.'),
-    line('Old Price', 'Only when on sale — the Vendor Price before the discount. It shows struck through on the site.'),
+    line('Price', 'What shoppers pay on Trendit — exactly the price shown on the site. Digits only: 24.99, not $24,99.'),
+    line('Commission %', 'Trendit\'s commission for your store. It is taken out of the Price, never added on top.'),
+    line('Trendit Earns', 'Worked out for you as you type: Price × Commission %.'),
+    line('Vendor Receives', 'Worked out for you: Price minus Trendit\'s commission. This is what your store receives per sale.'),
+    line('  Example', 'Price 10, Commission 8%  →  shopper pays $10.00, Trendit earns $0.80, you receive $9.20.'),
+    line('Old Price', 'Only when on sale — the Price before the discount. It shows struck through on the site.'),
     line('', ''),
     section('SIZES AND COLOURS'),
     line('Simple product', 'No sizes or colours? One row, Group left blank. Done.'),
-    line('Sizes', 'One row per size. Give all of them the same Group and Title. Each size has its own Stock, and can have its own Vendor Price.'),
+    line('Sizes', 'One row per size. Give all of them the same Group and Title. Each size has its own Stock, and can have its own Price.'),
     line('Colours', 'Add a Color on each row. Each colour becomes its own listing with its own photo, linked so shoppers can switch colour on the product page.'),
     line('Both', 'One row per colour AND size, all sharing one Group. See the example below.'),
     line('  Example', 'Group TEE-01 · Black · M · 20 · stock 5'),

@@ -15,9 +15,13 @@ const STANDARD_FEE = 4.0;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Mirrors the storefront's getDisplayPrice: list price plus platform fee. */
-const displayPrice = (price: number, feePercentage?: number) =>
-  !feePercentage || feePercentage <= 0 ? price : price * (1 + feePercentage / 100);
+/**
+ * Commission is taken out of the price, not added on top: the shopper pays the
+ * product's price, Trendit keeps `feePercentage` of it, and the vendor receives
+ * the rest. Mirrors frontend/src/utils/commission.ts.
+ */
+const commissionPercentOf = (feePercentage?: number) =>
+  typeof feePercentage === 'number' && Number.isFinite(feePercentage) && feePercentage > 0 ? feePercentage : 0;
 
 interface IncomingItem {
   productId?: string;
@@ -140,6 +144,9 @@ router.post('/create', async (req, res) => {
         variant: string;
         size: string | null;
         vendorId: string | null;
+        commissionPercent: number;
+        commissionAmount: number;
+        vendorAmount: number;
       }[] = [];
 
       for (const line of lines) {
@@ -177,17 +184,25 @@ router.post('/create', async (req, res) => {
           workingStock.set(line.productId, available - line.quantity);
         }
 
-        const unitPrice = round2(displayPrice(basePrice, p.feePercentage));
+        const unitPrice = round2(basePrice);
+        const subtotal = round2(unitPrice * line.quantity);
+        // Recorded at the moment of sale so a later change to the store's rate
+        // never rewrites what was earned on this order.
+        const commissionPercent = commissionPercentOf(p.feePercentage);
+        const commissionAmount = round2(subtotal * commissionPercent / 100);
         resolved.push({
           productId: line.productId,
           productName: p.title || 'Product',
           productImage: p.image || p.images?.[0] || null,
           quantity: line.quantity,
           unitPrice,
-          subtotal: round2(unitPrice * line.quantity),
+          subtotal,
           variant: `${line.color || 'N/A'} / ${line.size || 'N/A'}`,
           size: line.size || null,
           vendorId: p.vendorId || null,
+          commissionPercent,
+          commissionAmount,
+          vendorAmount: round2(subtotal - commissionAmount),
         });
       }
 
@@ -243,6 +258,9 @@ router.post('/create', async (req, res) => {
 
       const total = round2(cartTotal + deliveryFee - discount);
       const vendorIds = [...new Set(resolved.map(r => r.vendorId).filter((v): v is string => !!v))];
+      // Commission is on item prices before any promo code. Promo codes are
+      // issued by Trendit, so Trendit absorbs the discount rather than the vendor.
+      const commissionTotal = round2(resolved.reduce((sum, r) => sum + r.commissionAmount, 0));
 
       const orderData = {
         orderNumber,
@@ -259,6 +277,7 @@ router.post('/create', async (req, res) => {
         orderTotal: cartTotal,
         deliveryFee,
         total,
+        commissionTotal,
         promoCode: appliedCode,
         promoDiscount: promoDiscountPercent,
         customerNote: body.note || '',
@@ -274,8 +293,13 @@ router.post('/create', async (req, res) => {
       tx.set(adminDb.collection('users').doc(uid).collection('orders').doc(orderNumber), orderData);
 
       const vendorSubtotals: Record<string, number> = {};
+      const vendorCommissions: Record<string, number> = {};
+      const vendorPayouts: Record<string, number> = {};
       for (const r of resolved) {
-        if (r.vendorId) vendorSubtotals[r.vendorId] = round2((vendorSubtotals[r.vendorId] || 0) + r.subtotal);
+        if (!r.vendorId) continue;
+        vendorSubtotals[r.vendorId] = round2((vendorSubtotals[r.vendorId] || 0) + r.subtotal);
+        vendorCommissions[r.vendorId] = round2((vendorCommissions[r.vendorId] || 0) + r.commissionAmount);
+        vendorPayouts[r.vendorId] = round2((vendorPayouts[r.vendorId] || 0) + r.vendorAmount);
       }
 
       for (const vid of vendorIds) {
@@ -283,6 +307,10 @@ router.post('/create', async (req, res) => {
           ...orderData,
           vendorId: vid,
           globalOrderId: globalRef.id,
+          // This vendor's slice of a possibly multi-vendor order.
+          vendorSubtotal: vendorSubtotals[vid] || 0,
+          vendorCommission: vendorCommissions[vid] || 0,
+          vendorPayout: vendorPayouts[vid] || 0,
         });
         // merge rather than update: a vendor document that has not been created
         // yet must not be able to block a customer's checkout.

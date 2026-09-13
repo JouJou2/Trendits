@@ -7,6 +7,7 @@ import {
 import { collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { toast } from 'react-hot-toast';
+import { orderItemSplit } from '../../utils/commission';
 
 // Used only as a fallback when a vendor doc has no commissionRate set — matches
 // the same default shown/editable in AdminVendors.tsx. Actual payouts always use
@@ -65,8 +66,9 @@ export const AdminFinance = () => {
     };
   }, []);
 
-  // Each vendor keeps its own commission rate (set in AdminVendors), so gross
-  // volume and platform revenue have to be computed per item, not at one flat rate.
+  // Commission is taken out of each sale. Orders record their own commission
+  // and vendor share at the moment of sale; only older orders, which predate
+  // that, fall back to the store's current rate.
   const { gmv, cashFlowData, vendorEarnings, platformRevenue } = useMemo(() => {
     const monthlyData: Record<string, { gross: number, revenue: number }> = {};
     MONTHS.forEach(m => { monthlyData[m] = { gross: 0, revenue: 0 }; });
@@ -83,16 +85,14 @@ export const AdminFinance = () => {
 
       (order.items || []).forEach((item: any) => {
         if (!item.vendorId) return;
-        const rate = (vendorRates[item.vendorId] ?? DEFAULT_COMMISSION_RATE) / 100;
-        const subtotal = Number(item.subtotal || 0);
-        const platformShare = subtotal * rate;
-        totalPlatformRevenue += platformShare;
-        if (month) monthlyData[month].revenue += platformShare;
+        const { commission, vendorAmount } = orderItemSplit(item, vendorRates[item.vendorId] ?? DEFAULT_COMMISSION_RATE);
+        totalPlatformRevenue += commission;
+        if (month) monthlyData[month].revenue += commission;
 
         if (!earningsByVendor[item.vendorId]) {
           earningsByVendor[item.vendorId] = { name: vendorNames[item.vendorId] || item.vendor || item.vendorId, gross: 0 };
         }
-        earningsByVendor[item.vendorId].gross += subtotal * (1 - rate);
+        earningsByVendor[item.vendorId].gross += vendorAmount;
       });
     });
 
