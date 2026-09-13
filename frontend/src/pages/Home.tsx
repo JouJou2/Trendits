@@ -21,6 +21,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { allProducts, ProductType, Vendor, LEBANON_ZONES } from '../data/products';
 import { collection, onSnapshot, query, limit, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { type CategoryRecord, topLevelCategories, productInCategory } from '../utils/categories';
 import { ProductCard } from '../components/ProductCard';
 import { ProductCardSkeleton } from '../components/Skeletons';
 import { motion, AnimatePresence } from 'motion/react';
@@ -615,7 +616,7 @@ export const Home = () => {
   const [filterLoading, setFilterLoading] = useState(!!activeCategory);
   const [topVendors, setTopVendors] = useState<Vendor[]>([]);
   const [topVendorsLoading, setTopVendorsLoading] = useState(true);
-  const [categoryList, setCategoryList] = useState<{ id: string; name: string; slug: string; image?: string }[]>([]);
+  const [categoryList, setCategoryList] = useState<CategoryRecord[]>([]);
   const [banners, setBanners] = useState<Banner[]>([]);
 
   // Categories for the "Shop by Category" row
@@ -677,22 +678,20 @@ export const Home = () => {
     setFilterLoading(true);
 
     const fetchCategoryAndFilter = async () => {
+      let activeCats: CategoryRecord[] = categoryList;
       // Try to get category name from Firestore
       try {
         const catsSnap = await getDocs(collection(db, 'categories'));
         const cats = catsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
         const matched = cats.find((c: any) => c.slug === activeCategory);
+        activeCats = cats as CategoryRecord[];
         setCategoryName(matched?.name || activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1));
       } catch {
         setCategoryName(activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1));
       }
 
-      // Filter products by exact category slug match (categoryId is always stored as the slug)
-      const filtered = allProductsList.filter(p => {
-        const slug = activeCategory.toLowerCase();
-        const prodCategory = (p.categoryId || '').toLowerCase();
-        return prodCategory === slug;
-      });
+      // A main category also includes everything filed under its subcategories.
+      const filtered = allProductsList.filter(p => productInCategory(p.categoryId, activeCategory, activeCats));
 
       setFilteredProducts(filtered);
       setFilterLoading(false);
@@ -736,15 +735,16 @@ export const Home = () => {
     return filtered.length > 0 ? filtered : newArrivals;
   }, [allProductsList, topVendors, newArrivals]);
 
-  // How many products sit in each category, for the "Shop by Category" row
+  // How many products sit in each category, for the "Shop by Category" row.
+  // A main category's number includes its subcategories, so "Electronics" does
+  // not read 0 items when everything is filed under Electronics › Men.
   const categoryProductCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    allProductsList.forEach(p => {
-      const slug = (p.categoryId || '').toLowerCase();
-      if (slug) counts[slug] = (counts[slug] || 0) + 1;
-    });
+    for (const cat of categoryList) {
+      counts[cat.slug] = allProductsList.filter(p => productInCategory(p.categoryId, cat.slug, categoryList)).length;
+    }
     return counts;
-  }, [allProductsList]);
+  }, [allProductsList, categoryList]);
 
   // Personalized picks based on the visitor's own recent searches
   const justForYou = useMemo(() => {
@@ -809,7 +809,7 @@ export const Home = () => {
     <main className="pb-24">
       <SEO />
       <HeroCarousel banners={banners} />
-      <CategoryCircles categories={categoryList} counts={categoryProductCounts} />
+      <CategoryCircles categories={topLevelCategories(categoryList)} counts={categoryProductCounts} />
 
       {featuredItems.length > 0 && (
         <ProductGridSection

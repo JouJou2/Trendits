@@ -26,7 +26,7 @@ const itemVariants: Variants = {
 
 
 export const CategoriesPage = () => {
-  const [categories, setCategories] = useState<{id: string; name: string; image: string; slug: string; type?: 'main' | 'other'}[]>([]);
+  const [categories, setCategories] = useState<{id: string; name: string; image: string; slug: string; type?: 'main' | 'other'; parentId?: string | null}[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
@@ -46,8 +46,15 @@ export const CategoriesPage = () => {
     return () => unsub();
   }, [retryKey]);
 
-const mainCategories = categories.filter(c => c.type === 'main').map(c => ({ ...c, path: `/category/${c.slug}` }));
-const otherCategories = categories.filter(c => c.type === 'other' || !c.type).map(c => ({ ...c, path: `/category/${c.slug}` }));
+// Only main categories get their own card; subcategories are listed on it.
+const topLevel = categories.filter(c => !c.parentId);
+const subcategoriesOf = (parentId: string) =>
+  categories
+    .filter(c => c.parentId === parentId)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .map(c => ({ ...c, path: `/category/${c.slug}` }));
+const mainCategories = topLevel.filter(c => c.type === 'main').map(c => ({ ...c, path: `/category/${c.slug}` }));
+const otherCategories = topLevel.filter(c => c.type === 'other' || !c.type).map(c => ({ ...c, path: `/category/${c.slug}` }));
 
   if (loading) {
     return (
@@ -125,6 +132,19 @@ const otherCategories = categories.filter(c => c.type === 'other' || !c.type).ma
                 </div>
               </div>
             </Link>
+            {subcategoriesOf(cat.id).length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-4 px-2">
+                {subcategoriesOf(cat.id).map(sub => (
+                  <Link
+                    key={sub.id}
+                    to={sub.path}
+                    className="px-3.5 py-1.5 rounded-full bg-white border border-slate-200 text-xs font-semibold text-slate-600 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                  >
+                    {sub.name}
+                  </Link>
+                ))}
+              </div>
+            )}
           </motion.div>
         ))}
       </motion.div>
@@ -165,6 +185,19 @@ const otherCategories = categories.filter(c => c.type === 'other' || !c.type).ma
                 {cat.name}
               </span>
             </Link>
+            {subcategoriesOf(cat.id).length > 0 && (
+              <div className="flex flex-wrap justify-center gap-1.5 mt-3">
+                {subcategoriesOf(cat.id).map(sub => (
+                  <Link
+                    key={sub.id}
+                    to={sub.path}
+                    className="px-2.5 py-1 rounded-full bg-slate-50 text-[11px] font-semibold text-slate-500 hover:text-blue-600 transition-colors"
+                  >
+                    {sub.name}
+                  </Link>
+                ))}
+              </div>
+            )}
           </motion.div>
         ))}
       </motion.div>

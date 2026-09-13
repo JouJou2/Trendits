@@ -15,8 +15,24 @@ export const importImageRouter = Router();
  * Mounted behind requireAuth({ staffOnly: true }) and a rate limit in app.ts.
  * The fetch itself is guarded against SSRF in safeImageFetch.ts.
  */
+/**
+ * Where an imported image may be stored. A caller picks from this list by name;
+ * the path itself is never taken from the request, so nobody can write into an
+ * arbitrary part of the bucket.
+ */
+const DESTINATIONS: Record<string, string> = {
+  products: 'products',
+  categories: 'categories',
+  banners: 'banners',
+};
+
 importImageRouter.post('/import', async (req: AuthedRequest, res) => {
-  const { url } = (req.body ?? {}) as { url?: unknown };
+  const { url, folder } = (req.body ?? {}) as { url?: unknown; folder?: unknown };
+
+  const destination = DESTINATIONS[typeof folder === 'string' ? folder : 'products'];
+  if (!destination) {
+    return res.status(400).json({ error: 'Unknown image destination.' });
+  }
 
   if (typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ error: 'An image url is required.' });
@@ -30,7 +46,7 @@ importImageRouter.post('/import', async (req: AuthedRequest, res) => {
 
     // Random name: never derive a storage path from caller input, and never
     // reuse a name that another import could overwrite.
-    const objectPath = `products/${randomUUID()}.${image.extension}`;
+    const objectPath = `${destination}/${randomUUID()}.${image.extension}`;
     const downloadToken = randomUUID();
 
     await adminBucket.file(objectPath).save(image.buffer, {

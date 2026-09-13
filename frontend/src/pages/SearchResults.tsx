@@ -9,6 +9,7 @@ import { getDisplayPrice, ProductType } from '../data/products';
 import { motion, AnimatePresence } from 'motion/react';
 import { collection, onSnapshot, query, limit, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { productInCategory, type CategoryRecord } from '../utils/categories';
 import { ProductCard } from '../components/ProductCard';
 import { rankSearchResults } from '../utils/searchRanking';
 
@@ -224,7 +225,7 @@ export const SearchResults = () => {
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [realProducts, setRealProducts] = useState<ProductType[]>([]);
-  const [categories, setCategories] = useState<{id: string; name: string; slug: string}[]>([]);
+  const [categories, setCategories] = useState<CategoryRecord[]>([]);
     const [brands, setBrands] = useState<string[]>([]);
   const [vendors, setVendors] = useState<{id: string; name: string; image?: string; category?: string}[]>([]);
   const [loading, setLoading] = useState(true);
@@ -251,7 +252,8 @@ export const SearchResults = () => {
         setCategories(catSnap.docs.map(d => ({
           id: d.id,
           name: d.data().name,
-          slug: d.data().slug
+          slug: d.data().slug,
+          parentId: d.data().parentId ?? null,
         })));
                 // Fetch vendors
         const vendorsSnap = await getDocs(query(collection(db, 'vendors'), limit(100)));
@@ -332,7 +334,9 @@ export const SearchResults = () => {
 
     // Category filter
     if (filters.categories.length > 0) {
-      filtered = filtered.filter(p => filters.categories.includes(p.categoryId));
+      // A selected main category also matches products in its subcategories.
+      filtered = filtered.filter(p =>
+        filters.categories.some(slug => productInCategory(p.categoryId, slug, categories)));
     }
 
     // Brand filter
@@ -372,7 +376,7 @@ export const SearchResults = () => {
     }
 
     return filtered;
-  }, [searchTierResult, filters, sortBy]);
+  }, [searchTierResult, filters, sortBy, categories]);
 
   // Relevance groups survive filtering by intersecting with `results`. An explicit
   // sort (price/rating/newest) means the shopper wants one global ordering, so we

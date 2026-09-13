@@ -11,6 +11,7 @@ import { db, handleFirestoreError, OperationType } from '../../services/firebase
 import { ProductType, ProductVariant, variantId } from '../../data/products';
 import { toast } from 'react-hot-toast';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { categoryOptions, effectiveVariantTypes } from '../../utils/categories';
 
 // ── Category type ──
 type VariantType = 'size' | 'color';
@@ -19,6 +20,7 @@ interface CategoryOption {
   name: string;
   slug: string;
   variantTypes: VariantType[];
+  parentId?: string | null;
 }
 
 export const AdminProductForm = () => {
@@ -51,7 +53,8 @@ export const AdminProductForm = () => {
         id: d.id,
         name: d.data().name || d.id,
         slug: d.data().slug || d.id,
-        variantTypes: (d.data().variantTypes || []) as VariantType[]
+        variantTypes: (d.data().variantTypes || []) as VariantType[],
+        parentId: d.data().parentId ?? null,
       }));
       setCategories(cats);
     });
@@ -124,8 +127,11 @@ const uploadImageToStorage = (
   // Color is handled as separate, linked products (see siblingProducts below),
   // not an in-product axis — so only size feeds the stock/price matrix.
   const activeCategory = categories.find(c => c.slug === formData.categoryId);
-  const hasColorAxis = !!activeCategory?.variantTypes.includes('color');
-  const hasSizeAxis = !!activeCategory?.variantTypes.includes('size');
+  // A subcategory with no options of its own follows its main category, so
+  // filing a shirt under "Fashion › Men" keeps the size picker.
+  const activeVariantTypes = effectiveVariantTypes(activeCategory, categories);
+  const hasColorAxis = activeVariantTypes.includes('color');
+  const hasSizeAxis = activeVariantTypes.includes('size');
 
   const [newSizeInput, setNewSizeInput] = useState('');
 
@@ -547,9 +553,9 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isGaller
                     {categories.length === 0 && (
                       <option value="">Loading categories...</option>
                     )}
-                    {categories.map(cat => (
-                      <option key={cat.id} value={cat.slug}>
-                        {cat.name}
+                    {categoryOptions(categories).map(opt => (
+                      <option key={opt.slug} value={opt.slug}>
+                        {opt.label}
                       </option>
                     ))}
                   </select>

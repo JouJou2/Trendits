@@ -17,6 +17,8 @@ interface Category {
   slug: string;
   image?: string;
   type?: 'main' | 'other';
+  /** Set on subcategories; the mobile menu lists main categories only. */
+  parentId?: string | null;
 }
 
 interface SearchSuggestion {
@@ -519,7 +521,7 @@ export const Header = () => {
               )}
               <div className="border-t border-slate-100 my-2" />
               <p className="px-4 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Shop by Category</p>
-              {categories.map((cat) => (
+              {categories.filter(cat => !cat.parentId).map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => { handleCategoryClick(cat.slug); setMobileMenuOpen(false); }}

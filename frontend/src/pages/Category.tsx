@@ -6,11 +6,13 @@ import { ProductCard } from '../components/ProductCard';
 import { motion, Variants } from 'motion/react';
 import { collection, onSnapshot, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { type CategoryRecord, findBySlug, childrenOf } from '../utils/categories';
 
 interface CategoryMeta {
   title: string;
   subtitle: string;
-  subcategories: string[];
+  /** Real subcategories created under this category in the admin. */
+  subcategories: { slug: string; name: string }[];
 }
 
 const defaultMeta = (slug: string): CategoryMeta => ({
@@ -41,6 +43,7 @@ export const Category = () => {
   const { id } = useParams();
 
   const [categoryMetaMap, setCategoryMetaMap] = useState<Record<string, CategoryMeta>>({});
+  const [allCategories, setAllCategories] = useState<CategoryRecord[]>([]);
   const [meta, setMeta] = useState<CategoryMeta>(defaultMeta(id || ''));
   const currentCategoryKey = id || '';
 
@@ -50,15 +53,18 @@ export const Category = () => {
     const fetchCategoryMeta = async () => {
       try {
         const snap = await getDocs(collection(db, 'categories'));
+        const records = snap.docs.map(d => ({ id: d.id, ...d.data() } as CategoryRecord));
         const cats: Record<string, CategoryMeta> = {};
-        snap.docs.forEach(doc => {
-          const data = doc.data() as any;
+        records.forEach(data => {
           cats[data.slug] = {
             title: data.name || data.slug,
-            subtitle: data.description || `Browse our collection of ${data.slug}`,
-            subcategories: data.subcategories || [],
+            subtitle: data.description || `Browse our collection of ${data.name || data.slug}`,
+            subcategories: childrenOf(data, records)
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map(c => ({ slug: c.slug, name: c.name })),
           };
         });
+        setAllCategories(records);
         setCategoryMetaMap(cats);
         setMeta(cats[id] || defaultMeta(id));
       } catch (err) {
@@ -99,9 +105,20 @@ export const Category = () => {
     setLoading(true);
   }
 
+  // A main category's page also shows everything filed under its subcategories.
+  // Stored slugs are used verbatim (not lowercased) because the query is exact.
+  const querySlugs = useMemo(() => {
+    const cat = findBySlug(currentCategoryKey, allCategories);
+    const slugs = cat ? [cat.slug, ...childrenOf(cat, allCategories).map(c => c.slug)] : [];
+    // Firestore 'in' accepts at most 30 values.
+    return [...new Set([currentCategoryKey, ...slugs])].filter(Boolean).slice(0, 30);
+  }, [currentCategoryKey, allCategories]);
+  const querySlugsKey = querySlugs.join('|');
+
   useEffect(() => {
-    // Fetch products for this category from Firestore
-    const q = query(collection(db, 'products'), where('categoryId', '==', currentCategoryKey));
+    if (!querySlugs.length) return;
+    // Fetch products for this category (and its subcategories) from Firestore
+    const q = query(collection(db, 'products'), where('categoryId', 'in', querySlugs));
     // Real catalog only — no demo-product fallback.
     const unsub = onSnapshot(q, (snapshot) => {
       setDbProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as ProductType)));
@@ -113,7 +130,8 @@ export const Category = () => {
     });
 
     return () => unsub();
-  }, [currentCategoryKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [querySlugsKey]);
 
   // Derive available brands for this category
   const availableBrands = useMemo(() => {
@@ -188,24 +206,12 @@ export const Category = () => {
       });
     }
 
-    // Apply Subcategory Filter based on soft string matching
+    // Subcategory filter: products are filed under the subcategory's own slug.
+    // (This used to guess by searching titles for words like "phone", which
+    // only ever worked for demo data.)
     if (selectedSubcategory) {
       const sub = selectedSubcategory.toLowerCase();
-      filtered = filtered.filter(p => {
-        const text = (p.title + ' ' + (p.description || '')).toLowerCase();
-        
-        // Manual explicit overrides for better mock data matching
-        if (sub === 'smartphones') return text.includes('phone');
-        if (sub === 'smartwatches') return text.includes('watch');
-        if (sub === 'tvs & audio') return text.includes('tv') || text.includes('audio') || text.includes('speaker');
-        if (sub === "men's clothing") return text.includes('men');
-        if (sub === "women's clothing") return text.includes('women');
-        
-        // Generic fallback split word match
-        const words = sub.split(/[\s&]+/).filter(w => w.length > 3);
-        if (words.length > 0) return words.some(w => text.includes(w));
-        return text.includes(sub);
-      });
+      filtered = filtered.filter(p => (p.categoryId || '').toLowerCase() === sub);
     }
 
     // Apply Price Filter
@@ -339,7 +345,7 @@ export const Category = () => {
             onClick={() => setActiveFilterTab(activeFilterTab === 'subcategory' ? null : 'subcategory')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] font-bold uppercase tracking-wide border transition-all cursor-pointer whitespace-nowrap select-none ${activeFilterTab === 'subcategory' ? 'bg-primary border-primary text-white shadow-md' : selectedSubcategory !== null ? 'bg-blue-50/80 border-blue-200 text-primary' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
           >
-            <span>{selectedSubcategory || 'All Items'}</span>
+            <span>{meta.subcategories.find(sc => sc.slug === selectedSubcategory)?.name || 'All Items'}</span>
             <ChevronDown className={`w-3 h-3 transition-transform duration-300 ${activeFilterTab === 'subcategory' ? 'rotate-180' : ''}`} />
           </button>
 
@@ -451,16 +457,16 @@ export const Category = () => {
                 >
                   All Arrivals
                 </button>
-                {meta.subcategories.map((sub: string) => (
+                {meta.subcategories.map(sub => (
                   <button
-                    key={sub}
+                    key={sub.slug}
                     onClick={() => {
-                      setSelectedSubcategory(sub);
+                      setSelectedSubcategory(sub.slug);
                       setActiveFilterTab(null);
                     }}
-                    className={`text-center px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${selectedSubcategory === sub ? 'bg-primary border-primary text-white shadow-sm' : 'bg-slate-50 hover:bg-slate-100 border-transparent text-slate-700'}`}
+                    className={`text-center px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer border ${selectedSubcategory === sub.slug ? 'bg-primary border-primary text-white shadow-sm' : 'bg-slate-50 hover:bg-slate-100 border-transparent text-slate-700'}`}
                   >
-                    {sub}
+                    {sub.name}
                   </button>
                 ))}
               </div>

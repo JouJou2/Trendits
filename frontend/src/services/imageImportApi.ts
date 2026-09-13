@@ -13,14 +13,20 @@ export interface ImportedImage {
  * back the permanent URL. The fetch happens server-side so the product ends up
  * referencing a file we control rather than hotlinking someone else's host.
  */
-export const importImageFromUrl = async (idToken: string, url: string): Promise<ImportedImage> => {
+export type ImageDestination = 'products' | 'categories' | 'banners';
+
+export const importImageFromUrl = async (
+  idToken: string,
+  url: string,
+  folder: ImageDestination = 'products',
+): Promise<ImportedImage> => {
   const res = await fetch(`${BACKEND_URL}/api/images/import`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, folder }),
   });
 
   const data = (await res.json().catch(() => ({}))) as Partial<ImportedImage> & { error?: string };
