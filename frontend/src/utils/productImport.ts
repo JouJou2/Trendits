@@ -1,6 +1,7 @@
 import type { ProductType, ProductVariant } from '../data/products';
 import {
   type CategoryRecord, categoryOptions, effectiveVariantTypes, slugify,
+  normalizeCategoryIds, MAX_PRODUCT_CATEGORIES,
 } from './categories';
 
 /**
@@ -35,6 +36,11 @@ export interface SheetRow {
   oldPrice: number | null;
   description: string;
   category: string;
+  /**
+   * Extra categories, as typed. null when the sheet has no such column at all
+   * (an older sheet), which leaves a product's existing extras untouched.
+   */
+  alsoIn: string | null;
   imageUrl: string;
   stock: number | null;
   featured: boolean | null;
@@ -76,6 +82,7 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
     return undefined;
   };
   const text = (...names: string[]) => String(pick(...names) ?? '').trim();
+  const ALSO_IN = ['Also In', 'Also Show In', 'More Categories', 'Extra Categories'];
 
   return {
     rowNumber,
@@ -90,6 +97,7 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
     oldPrice: toNumber(pick('Old Price', 'OldPrice', 'Compare at Price')),
     description: text('Description'),
     category: text('Category', 'CategoryID', 'Category Id'),
+    alsoIn: ALSO_IN.some(name => normalized.has(key(name))) ? text(...ALSO_IN) : null,
     imageUrl: text('Image URL', 'ImageURL', 'Image'),
     stock: toNumber(pick('Stock', 'Quantity', 'Qty')),
     featured: toBool(pick('Featured')),
@@ -104,7 +112,7 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
 export interface ImportContext {
   categories: CategoryRecord[];
   /** Products the importer can already see, used to tell updates from creates. */
-  existingProducts: Pick<ProductType, 'id' | 'variantGroupId'>[];
+  existingProducts: (Pick<ProductType, 'id' | 'variantGroupId'> & Partial<Pick<ProductType, 'categoryId' | 'categoryIds'>>)[];
   /** Admins may set commission, rating and reviews; vendors may not. */
   isStaff: boolean;
   /** For a vendor, every row is filed under their own store regardless of the sheet. */
@@ -145,6 +153,36 @@ const resolveCategory = (value: string, categories: CategoryRecord[]): string | 
     ?? options.find(o => o.slug.toLowerCase() === slugify(value))?.slug
     ?? null
   );
+};
+
+/**
+ * Reads an "Also In" cell: category names or slugs separated by commas,
+ * semicolons, | or line breaks. Pieces are rejoined when a category's own name
+ * contains a comma, so "Bags, Shoes" still resolves if that is one category.
+ */
+export const resolveCategoryList = (value: string, categories: CategoryRecord[]) => {
+  const pieces = value.split(/[,;|\n]/).map(p => p.trim()).filter(Boolean);
+  const slugs: string[] = [];
+  const unknown: string[] = [];
+  let i = 0;
+  while (i < pieces.length) {
+    let matched = false;
+    // Longest run first, so a comma inside a category name wins over a split.
+    for (let j = pieces.length; j > i; j--) {
+      const slug = resolveCategory(pieces.slice(i, j).join(', '), categories);
+      if (slug) {
+        slugs.push(slug);
+        i = j;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      unknown.push(pieces[i]);
+      i++;
+    }
+  }
+  return { slugs: [...new Set(slugs)], unknown };
 };
 
 export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan => {
@@ -292,6 +330,24 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
       const vendorId = ctx.lockedVendorId || lead.vendorId;
       const image = ctx.storedImage(listingRows.map(r => r.imageUrl).find(Boolean) ?? '');
 
+      // Extra categories. A sheet without the column keeps whatever extras the
+      // product already had, minus a main category that has just changed.
+      let extraSlugs: string[];
+      if (lead.alsoIn !== null) {
+        const { slugs, unknown } = resolveCategoryList(lead.alsoIn, ctx.categories);
+        if (unknown.length) {
+          warnings.push(`${label}${color ? ` (${color})` : ''}: skipped unknown "Also In" categor${unknown.length === 1 ? 'y' : 'ies'} ${unknown.map(u => `"${u}"`).join(', ')}.`);
+        }
+        extraSlugs = slugs;
+      } else {
+        const current = ctx.existingProducts.find(p => String(p.id) === id);
+        extraSlugs = (current?.categoryIds || []).filter(s => s !== current?.categoryId);
+      }
+      const categoryIds = normalizeCategoryIds(lead.categorySlug, extraSlugs);
+      if (new Set([lead.categorySlug, ...extraSlugs]).size > MAX_PRODUCT_CATEGORIES) {
+        warnings.push(`${label}${color ? ` (${color})` : ''}: a product can be in up to ${MAX_PRODUCT_CATEGORIES} categories; kept the first ${MAX_PRODUCT_CATEGORIES}.`);
+      }
+
       const data: Record<string, unknown> = {
         title,
         brand: lead.brand,
@@ -299,6 +355,7 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
         oldPrice: lead.oldPrice,
         description: lead.description,
         categoryId: lead.categorySlug,
+        categoryIds,
         stock,
         sizeOptions,
         sizes: sizeOptions,
@@ -369,6 +426,8 @@ export interface ExportRow {
   oldPrice: number | string;
   description: string;
   category: string;
+  /** Extra categories by label, comma separated. */
+  alsoIn: string;
   imageUrl: string;
   stock: number | string;
   featured: string;
@@ -412,6 +471,10 @@ export const productsToRows = (
       oldPrice: p.oldPrice ?? '',
       description: p.description || '',
       category: labels.get(p.categoryId) || p.categoryId || '',
+      alsoIn: (p.categoryIds || [])
+        .filter(s => s !== p.categoryId)
+        .map(s => labels.get(s) || s)
+        .join(', '),
       imageUrl: p.image || '',
       featured: p.featured ? 'Yes' : 'No',
       vendorId: lockedVendorId || p.vendorId || '',

@@ -6,7 +6,7 @@ import { ProductCard } from '../components/ProductCard';
 import { motion, Variants } from 'motion/react';
 import { collection, onSnapshot, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { type CategoryRecord, findBySlug, childrenOf } from '../utils/categories';
+import { type CategoryRecord, findBySlug, childrenOf, productCategorySlugs } from '../utils/categories';
 
 interface CategoryMeta {
   title: string;
@@ -117,19 +117,39 @@ export const Category = () => {
 
   useEffect(() => {
     if (!querySlugs.length) return;
-    // Fetch products for this category (and its subcategories) from Firestore
-    const q = query(collection(db, 'products'), where('categoryId', 'in', querySlugs));
+    // Two live queries, merged: products whose main category is here, and
+    // products that also list this category in categoryIds. The first still
+    // matters because products saved before categoryIds existed only have
+    // categoryId.
+    const byMain = new Map<string, ProductType>();
+    const byExtra = new Map<string, ProductType>();
+    const pending = new Set(['main', 'extra']);
+    const publish = () => {
+      setDbProducts([...new Map([...byMain, ...byExtra]).values()]);
+      if (pending.size === 0) setLoading(false);
+    };
+    const listen = (field: 'main' | 'extra', target: Map<string, ProductType>) => onSnapshot(
+      field === 'main'
+        ? query(collection(db, 'products'), where('categoryId', 'in', querySlugs))
+        : query(collection(db, 'products'), where('categoryIds', 'array-contains-any', querySlugs)),
+      (snapshot) => {
+        target.clear();
+        snapshot.docs.forEach(d => target.set(d.id, { id: d.id, ...d.data() } as unknown as ProductType));
+        pending.delete(field);
+        publish();
+      },
+      (error) => {
+        // One failing query should not blank the other's results.
+        console.error(`Category fetch error (${field}):`, error);
+        target.clear();
+        pending.delete(field);
+        publish();
+      },
+    );
     // Real catalog only — no demo-product fallback.
-    const unsub = onSnapshot(q, (snapshot) => {
-      setDbProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as unknown as ProductType)));
-      setLoading(false);
-    }, (error) => {
-      console.error("Category fetch error:", error);
-      setDbProducts([]);
-      setLoading(false);
-    });
+    const unsubs = [listen('main', byMain), listen('extra', byExtra)];
 
-    return () => unsub();
+    return () => unsubs.forEach(unsub => unsub());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [querySlugsKey]);
 
@@ -206,12 +226,11 @@ export const Category = () => {
       });
     }
 
-    // Subcategory filter: products are filed under the subcategory's own slug.
-    // (This used to guess by searching titles for words like "phone", which
-    // only ever worked for demo data.)
+    // Subcategory filter: products are filed under the subcategory's own slug,
+    // as their main category or one of their extra ones.
     if (selectedSubcategory) {
       const sub = selectedSubcategory.toLowerCase();
-      filtered = filtered.filter(p => (p.categoryId || '').toLowerCase() === sub);
+      filtered = filtered.filter(p => productCategorySlugs(p).includes(sub));
     }
 
     // Apply Price Filter

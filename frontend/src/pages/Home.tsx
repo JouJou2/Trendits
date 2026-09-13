@@ -21,7 +21,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { allProducts, ProductType, Vendor, LEBANON_ZONES } from '../data/products';
 import { collection, onSnapshot, query, limit, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { type CategoryRecord, topLevelCategories, productInCategory } from '../utils/categories';
+import { type CategoryRecord, topLevelCategories, productInCategory, productCategorySlugs } from '../utils/categories';
 import { ProductCard } from '../components/ProductCard';
 import { ProductCardSkeleton } from '../components/Skeletons';
 import { motion, AnimatePresence } from 'motion/react';
@@ -691,7 +691,7 @@ export const Home = () => {
       }
 
       // A main category also includes everything filed under its subcategories.
-      const filtered = allProductsList.filter(p => productInCategory(p.categoryId, activeCategory, activeCats));
+      const filtered = allProductsList.filter(p => productInCategory(p, activeCategory, activeCats));
 
       setFilteredProducts(filtered);
       setFilterLoading(false);
@@ -741,7 +741,7 @@ export const Home = () => {
   const categoryProductCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const cat of categoryList) {
-      counts[cat.slug] = allProductsList.filter(p => productInCategory(p.categoryId, cat.slug, categoryList)).length;
+      counts[cat.slug] = allProductsList.filter(p => productInCategory(p, cat.slug, categoryList)).length;
     }
     return counts;
   }, [allProductsList, categoryList]);
@@ -762,7 +762,7 @@ export const Home = () => {
     const matched = allProductsList.filter(p => {
       const title = (p.name || p.title || '').toLowerCase();
       const brand = (p.brand || '').toLowerCase();
-      const category = (p.categoryId || '').toLowerCase();
+      const category = productCategorySlugs(p).join(' ');
       const tags = (p.tags || []).map(t => t.toLowerCase());
       return terms.some(term =>
         title.includes(term) || brand.includes(term) || category.includes(term) ||

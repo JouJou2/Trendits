@@ -64,7 +64,9 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
   { header: 'Description', key: 'description', width: 40,
     note: 'What it is, what it fits, what is in the box. A few sentences is plenty.' },
   { header: 'Category', key: 'category', width: 24, required: true,
-    note: 'Pick from the dropdown. Subcategories appear as "Main › Sub". Whether sizes and colours are allowed depends on the category.' },
+    note: 'The main category — pick from the dropdown. Subcategories appear as "Main › Sub". Whether sizes and colours are allowed depends on this category.' },
+  { header: 'Also In', key: 'alsoIn', width: 30,
+    note: 'Optional. Other categories this product should also appear in, separated by commas — e.g. Men › Clothing, Men › Sports. Type them exactly as they appear in the Category dropdown.' },
   { header: 'Image URL', key: 'imageUrl', width: 40, required: true,
     note: 'A Google Drive share link works, as long as the file is shared with "Anyone with the link". The image is copied into Trendit on import. For colours, put each colour\'s photo on its own rows.' },
   { header: 'Stock', key: 'stock', width: 9, required: true,
@@ -79,7 +81,7 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
     note: 'Number of customer reviews. Not editable.' },
 ];
 
-const colLetter = (index: number) => String.fromCharCode(65 + index); // A..S — 19 columns
+const colLetter = (index: number) => String.fromCharCode(65 + index); // A..T — 20 columns
 const indexOf = (key: keyof ExportRow) => PRODUCT_COLUMNS.findIndex(c => c.key === key);
 const letterOf = (key: keyof ExportRow) => colLetter(indexOf(key));
 
@@ -310,6 +312,11 @@ export const buildProductWorkbook = async ({
     line('Vendor Receives', 'Worked out for you: Price minus Trendit\'s commission. This is what your store receives per sale.'),
     line('  Example', 'Price 10, Commission 8%  →  shopper pays $10.00, Trendit earns $0.80, you receive $9.20.'),
     line('Old Price', 'Only when on sale — the Price before the discount. It shows struck through on the site.'),
+    line('', ''),
+    section('CATEGORIES'),
+    line('Category', 'The main category, from the dropdown. It decides whether sizes and colours are allowed.'),
+    line('Also In', 'Optional. Any other categories the product should show up in, separated by commas. Copy the names exactly as the Category dropdown shows them.'),
+    line('  Example', 'Category: Men   ·   Also In: Men › Clothing, Men › Sports   →  shows on all three pages.'),
     line('', ''),
     section('SIZES AND COLOURS'),
     line('Simple product', 'No sizes or colours? One row, Group left blank. Done.'),

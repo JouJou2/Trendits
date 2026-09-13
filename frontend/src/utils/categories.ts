@@ -1,8 +1,9 @@
 /**
  * One place that knows how categories nest.
  *
- * A product stores a single `categoryId` — the slug of the most specific
- * category it belongs to. A subcategory records its parent's document id in
+ * A product's main `categoryId` is the slug of the most specific category it
+ * belongs to, and `categoryIds` adds any others it also appears in (see
+ * productCategorySlugs). A subcategory records its parent's document id in
  * `parentId`. Everything that lists, counts or filters by category goes
  * through here so a parent page, its product count and every menu agree on
  * what "in Electronics" means.
@@ -69,10 +70,50 @@ export const slugsWithin = (slug: string, all: CategoryRecord[]): string[] => {
   return [cat.slug, ...childrenOf(cat, all).map(c => c.slug)].map(s => s.toLowerCase());
 };
 
-/** Does a product with this categoryId belong on this category's page? */
-export const productInCategory = (productCategoryId: string | undefined, slug: string, all: CategoryRecord[]) => {
-  if (!productCategoryId) return false;
-  return slugsWithin(slug, all).includes(productCategoryId.toLowerCase());
+/** How many categories one product may appear in, main category included. */
+export const MAX_PRODUCT_CATEGORIES = 10;
+
+/**
+ * Every category slug a product is filed under.
+ *
+ * `categoryId` is the product's main category: it decides sizes and colours,
+ * the breadcrumb and related items. `categoryIds` lists every category the
+ * product also appears in, so men's running shoes can show under Men, Men's
+ * Clothing and Men's Sports at once. Products saved before `categoryIds`
+ * existed only have `categoryId`, which is why both are read.
+ */
+export const productCategorySlugs = (
+  product: { categoryId?: string; categoryIds?: unknown } | null | undefined,
+): string[] => {
+  const extra = Array.isArray(product?.categoryIds) ? product!.categoryIds : [];
+  return [...new Set(
+    [product?.categoryId, ...extra]
+      .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+      .map(s => s.toLowerCase()),
+  )];
+};
+
+/**
+ * The `categoryIds` value to store: main category first, no duplicates, and
+ * within the limit Firestore rules allow.
+ */
+export const normalizeCategoryIds = (main: string | undefined, extra: readonly string[] | undefined) =>
+  [...new Set([main, ...(extra || [])].filter((s): s is string => Boolean(s && s.trim())))]
+    .slice(0, MAX_PRODUCT_CATEGORIES);
+
+/**
+ * Does a product belong on this category's page? Accepts the product itself
+ * (checks all of its categories) or a single slug.
+ */
+export const productInCategory = (
+  product: string | { categoryId?: string; categoryIds?: unknown } | undefined,
+  slug: string,
+  all: CategoryRecord[],
+) => {
+  const own = typeof product === 'string' ? productCategorySlugs({ categoryId: product }) : productCategorySlugs(product);
+  if (!own.length) return false;
+  const within = slugsWithin(slug, all);
+  return own.some(s => within.includes(s));
 };
 
 /**

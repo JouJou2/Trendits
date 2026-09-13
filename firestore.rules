@@ -76,6 +76,9 @@ service cloud.firestore {
              data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
              data.price is number && data.price >= 0 &&
              data.categoryId is string && data.categoryId.size() <= 100 &&
+             // Extra categories the product also appears in; the limit matches
+             // MAX_PRODUCT_CATEGORIES in src/utils/categories.ts.
+             (data.get('categoryIds', []) is list && data.get('categoryIds', []).size() <= 10) &&
              (data.get('vendorId', '') is string) &&
              (data.get('stock', 0) is number) &&
              (data.get('feePercentage', 0) is number);

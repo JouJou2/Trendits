@@ -22,6 +22,8 @@
   export interface ProductType {
     id: string | number;
     categoryId: string;
+    /** Every category the product appears in, main one first. See utils/categories.ts. */
+    categoryIds?: string[];
     vendorId?: string;
     title: string;
     brand: string;

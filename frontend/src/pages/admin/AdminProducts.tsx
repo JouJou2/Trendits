@@ -199,7 +199,7 @@ useEffect(() => {
   const filteredProducts = products.filter(p => {
     const matchesSearch = (p.title || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (p.brand || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || productInCategory(p.categoryId, selectedCategory, categories);
+    const matchesCategory = selectedCategory === 'All' || productInCategory(p, selectedCategory, categories);
     return matchesSearch && matchesCategory;
   });
 
@@ -250,7 +250,7 @@ useEffect(() => {
         color, size, price: 20, fees: isStaff ? '' : fee,
         commissionAmount: Math.round(20 * fee) / 100,
         vendorAmount: Math.round((20 - Math.round(20 * fee) / 100) * 100) / 100,
-        oldPrice: '', description: 'Soft cotton tee, regular fit.', category: exampleCategory,
+        oldPrice: '', description: 'Soft cotton tee, regular fit.', category: exampleCategory, alsoIn: '',
         imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
         stock, featured: 'No', vendorId: lockedVendorId || '', rating: '', reviews: '',
       });
@@ -427,7 +427,10 @@ useEffect(() => {
 
         const plan = planImport(sheetRows, {
           categories,
-          existingProducts: products.map(pr => ({ id: String(pr.id), variantGroupId: pr.variantGroupId })),
+          existingProducts: products.map(pr => ({
+            id: String(pr.id), variantGroupId: pr.variantGroupId,
+            categoryId: pr.categoryId, categoryIds: pr.categoryIds,
+          })),
           isStaff: staff,
           lockedVendorId,
           commissionByVendor,

@@ -1,4 +1,5 @@
 import { ProductType } from '../data/products';
+import { productCategorySlugs } from './categories';
 
 // Graduated search relevance.
 //
@@ -49,7 +50,7 @@ const isSameSeries = (a: string, b: string) => {
 };
 
 const productText = (p: ProductType) =>
-  [p.title, p.name, p.brand, p.description, p.categoryId, ...(p.tags || [])]
+  [p.title, p.name, p.brand, p.description, ...productCategorySlugs(p), ...(p.tags || [])]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();

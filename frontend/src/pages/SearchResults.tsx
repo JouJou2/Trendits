@@ -9,7 +9,7 @@ import { getDisplayPrice, ProductType } from '../data/products';
 import { motion, AnimatePresence } from 'motion/react';
 import { collection, onSnapshot, query, limit, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { productInCategory, type CategoryRecord } from '../utils/categories';
+import { productInCategory, productCategorySlugs, type CategoryRecord } from '../utils/categories';
 import { ProductCard } from '../components/ProductCard';
 import { rankSearchResults } from '../utils/searchRanking';
 
@@ -299,7 +299,7 @@ export const SearchResults = () => {
   const fallbackProducts = useMemo(() => {
     if (!queryParam.trim() || rankedGroups.length > 0) return [];
     const haystackOf = (p: ProductType) =>
-      [p.title, p.name, p.brand, p.description, p.categoryId, ...(p.tags || [])]
+      [p.title, p.name, p.brand, p.description, ...productCategorySlugs(p), ...(p.tags || [])]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -336,7 +336,7 @@ export const SearchResults = () => {
     if (filters.categories.length > 0) {
       // A selected main category also matches products in its subcategories.
       filtered = filtered.filter(p =>
-        filters.categories.some(slug => productInCategory(p.categoryId, slug, categories)));
+        filters.categories.some(slug => productInCategory(p, slug, categories)));
     }
 
     // Brand filter

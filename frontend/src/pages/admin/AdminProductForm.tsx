@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import {
   ArrowLeft, Save, Plus, Trash2, Box,
   DollarSign, Image as ImageIcon, Activity, List, Loader2,
-  Upload, Palette, Ruler
+  Upload, Palette, Ruler, Check
 } from 'lucide-react';
 import { doc, getDoc, addDoc, collection, updateDoc, onSnapshot, query, where, limit, getDocs } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,7 +11,7 @@ import { db, handleFirestoreError, OperationType } from '../../services/firebase
 import { ProductType, ProductVariant, variantId } from '../../data/products';
 import { toast } from 'react-hot-toast';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { categoryOptions, effectiveVariantTypes } from '../../utils/categories';
+import { categoryOptions, effectiveVariantTypes, normalizeCategoryIds, MAX_PRODUCT_CATEGORIES } from '../../utils/categories';
 import { fetchVendorCommission, splitSale } from '../../utils/commission';
 
 // ── Category type ──
@@ -187,6 +187,7 @@ const uploadImageToStorage = (
         title: `${colorName.toUpperCase()} - ${formData.title || ''}`,
         brand: formData.brand || '',
         categoryId: formData.categoryId || '',
+        categoryIds: normalizeCategoryIds(formData.categoryId, formData.categoryIds),
         vendorId: formData.vendorId || '',
         description: formData.description || '',
         price: Number(formData.price) || 0,
@@ -358,6 +359,7 @@ setAvailableVendors(vends);
         // Mirror onto the legacy flat fields other pages (e.g. category color filters) still read.
         colors: variantColor ? [variantColor] : (formData.colors || []),
         sizes: sizeOptions,
+        categoryIds: normalizeCategoryIds(formData.categoryId, formData.categoryIds),
       };
 
       if (isNew) {
@@ -569,7 +571,15 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isGaller
                   <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
                   <select 
                     value={formData.categoryId}
-                    onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
+                    onChange={(e) => {
+                      // The old main category must not linger as an "also show in" pick.
+                      const extras = (formData.categoryIds || []).filter(s => s !== formData.categoryId);
+                      setFormData({
+                        ...formData,
+                        categoryId: e.target.value,
+                        categoryIds: normalizeCategoryIds(e.target.value, extras),
+                      });
+                    }}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors appearance-none"
                   >
                     {categories.length === 0 && (
@@ -581,8 +591,52 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isGaller
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-slate-500 mt-1">The main category decides sizes, colours and the breadcrumb.</p>
                 </div>
               </div>
+              {categories.length > 0 && (() => {
+                const extras = (formData.categoryIds || []).filter(s => s !== formData.categoryId);
+                const atLimit = extras.length + 1 >= MAX_PRODUCT_CATEGORIES;
+                const toggleExtra = (slug: string) => {
+                  const next = extras.includes(slug) ? extras.filter(s => s !== slug) : [...extras, slug];
+                  setFormData({ ...formData, categoryIds: normalizeCategoryIds(formData.categoryId, next) });
+                };
+                return (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Also show in <span className="text-slate-400 font-normal">(optional)</span>
+                    </label>
+                    <p className="text-xs text-slate-500 mb-2">
+                      Pick any other categories this product should appear in — e.g. running shoes under Men, Men › Clothing and Men › Sports.
+                    </p>
+                    <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      {categoryOptions(categories).filter(opt => opt.slug !== formData.categoryId).map(opt => {
+                        const selected = extras.includes(opt.slug);
+                        return (
+                          <button
+                            key={opt.slug}
+                            type="button"
+                            onClick={() => toggleExtra(opt.slug)}
+                            disabled={!selected && atLimit}
+                            aria-pressed={selected}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                              selected
+                                ? 'bg-blue-600 border-blue-600 text-white'
+                                : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300'
+                            }`}
+                          >
+                            {selected && <Check className="w-3 h-3 inline mr-1 -mt-0.5" />}
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {atLimit && (
+                      <p className="text-xs text-amber-600 mt-1">A product can be in up to {MAX_PRODUCT_CATEGORIES} categories.</p>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Seller (Vendor) <span className="text-rose-500">*</span></label>

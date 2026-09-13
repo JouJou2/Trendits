@@ -172,9 +172,14 @@ export const AdminCategories = () => {
     }
 
     try {
-      const inUseSnap = await getDocs(query(collection(db, 'products'), where('categoryId', '==', cat.slug)));
-      if (!inUseSnap.empty) {
-        toast.error(`Can't delete "${cat.name}" — ${inUseSnap.size} product${inUseSnap.size !== 1 ? 's' : ''} still use this category. Reassign them first.`);
+      // A product may use this as its main category or as one of its extras.
+      const [mainSnap, extraSnap] = await Promise.all([
+        getDocs(query(collection(db, 'products'), where('categoryId', '==', cat.slug))),
+        getDocs(query(collection(db, 'products'), where('categoryIds', 'array-contains', cat.slug))),
+      ]);
+      const inUse = new Set([...mainSnap.docs, ...extraSnap.docs].map(d => d.id)).size;
+      if (inUse > 0) {
+        toast.error(`Can't delete "${cat.name}" — ${inUse} product${inUse !== 1 ? 's' : ''} still use this category. Reassign them first.`);
         return;
       }
     } catch (error) {
