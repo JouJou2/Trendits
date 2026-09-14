@@ -31,6 +31,8 @@ export interface SheetRow {
   brand: string;
   color: string;
   size: string;
+  /** Excel turned what was typed in Size (e.g. 7-8) into a date. */
+  sizeIsDate?: boolean;
   price: number | null;
   fees: number | null;
   oldPrice: number | null;
@@ -91,7 +93,8 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
     title: text('Title', 'Name'),
     brand: text('Brand'),
     color: text('Color', 'Colour'),
-    size: text('Size'),
+    size: pick('Size', 'Sizes') instanceof Date ? '' : text('Size', 'Sizes'),
+    sizeIsDate: pick('Size', 'Sizes') instanceof Date,
     price: toNumber(pick('Price', 'Vendor Price', 'Price (USD)', 'Original Price')),
     fees: toNumber(pick('Commission %', 'Commission', 'Fees %', 'Fees', 'Fee %', 'feePercentage')),
     oldPrice: toNumber(pick('Old Price', 'OldPrice', 'Compare at Price')),
@@ -185,6 +188,86 @@ export const resolveCategoryList = (value: string, categories: CategoryRecord[])
   return { slugs: [...new Set(slugs)], unknown };
 };
 
+// ── Several sizes in one cell ───────────────────────────────────────────────
+
+const LETTER_SIZES = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '4XL', '5XL'];
+const MAX_SIZES_IN_CELL = 60;
+
+export interface SizeCell {
+  sizes: { size: string; stock: number | null }[];
+  /** Ranges that were spelled out, e.g. "38-45", for the import report. */
+  ranges: string[];
+  problems: string[];
+}
+
+/**
+ * Reads a Size cell that may name several sizes, so a shoe can go on one row
+ * instead of one row per size:
+ *
+ *   42                     one size
+ *   40, 41, 42             a list (commas, semicolons, | or line breaks)
+ *   38-45  or  38 to 45    a range: 38, 39 … 45
+ *   7-10.5                 half sizes when either end has .5
+ *   S-XL                   letter sizes: S, M, L, XL
+ *   40 (5), 41 (3)         each size with its own stock
+ *
+ * A two-number range one step apart, like 2-3 or 10-11, is kept as a single
+ * size: that is how kids' ages are written, and nobody types a range for two
+ * shoe sizes.
+ */
+export const parseSizeCell = (value: string): SizeCell => {
+  const sizes: SizeCell['sizes'] = [];
+  const ranges: string[] = [];
+  const problems: string[] = [];
+
+  for (const rawToken of value.split(/[,;|\n]/)) {
+    let token = rawToken.trim();
+    if (!token) continue;
+
+    // Per-size stock: "40 (5)", "40:5" or "40=5".
+    let stock: number | null = null;
+    const withStock = token.match(/^(.+?)\s*(?:\(\s*(\d+)\s*\)|[:=]\s*(\d+))$/);
+    if (withStock) {
+      token = withStock[1].trim();
+      stock = Number(withStock[2] ?? withStock[3]);
+    }
+
+    const range = token.match(/^(\d+(?:\.5)?|[a-z0-9]+)\s*(?:-|–|—|\bto\b)\s*(\d+(?:\.5)?|[a-z0-9]+)$/i);
+    if (range) {
+      const [from, to] = [range[1], range[2]];
+      const a = Number(from);
+      const b = Number(to);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        const step = from.includes('.') || to.includes('.') ? 0.5 : 1;
+        const spansOneStep = step === 1 && Math.abs(b - a) === 1 && !/\bto\b/i.test(token);
+        if (b > a && !spansOneStep) {
+          for (let n = a; n <= b + 1e-9; n += step) sizes.push({ size: String(Math.round(n * 2) / 2), stock });
+          ranges.push(token);
+          continue;
+        }
+        if (b < a) {
+          problems.push(`size range "${token}" runs backwards`);
+          continue;
+        }
+      } else {
+        const i = LETTER_SIZES.indexOf(from.toUpperCase());
+        const j = LETTER_SIZES.indexOf(to.toUpperCase());
+        if (i >= 0 && j > i) {
+          LETTER_SIZES.slice(i, j + 1).forEach(size => sizes.push({ size, stock }));
+          ranges.push(token);
+          continue;
+        }
+      }
+    }
+    sizes.push({ size: token, stock });
+  }
+
+  if (sizes.length > MAX_SIZES_IN_CELL) {
+    problems.push(`${sizes.length} sizes in one cell is more than the ${MAX_SIZES_IN_CELL} allowed`);
+  }
+  return { sizes, ranges, problems };
+};
+
 export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan => {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -217,11 +300,26 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
     if (r.id && !/^[a-zA-Z0-9_-]{1,128}$/.test(r.id)) problems.push('ID may only contain letters, numbers, - and _');
     if (!ctx.isStaff && !ctx.lockedVendorId) problems.push('Your account is not linked to a store');
     if (ctx.isStaff && !r.vendorId) problems.push('Vendor ID is empty');
+    if (r.sizeIsDate) problems.push('Excel turned the Size into a date — format the Size column as Text, then type the size again');
+    const sizeCell = parseSizeCell(r.size);
+    problems.push(...sizeCell.problems.map(p => p.charAt(0).toUpperCase() + p.slice(1)));
 
     if (problems.length) {
       errors.push(`Row ${r.rowNumber}${r.title ? ` ("${r.title}")` : ''}: ${problems.join('; ')}.`);
+      continue;
+    }
+    // A row naming several sizes becomes one row per size. Stock in the Stock
+    // column applies to each size, unless a size gives its own, e.g. 41 (3).
+    if (sizeCell.sizes.length > 1) {
+      if (sizeCell.ranges.length) {
+        warnings.push(`Row ${r.rowNumber}: sizes ${sizeCell.ranges.join(', ')} were added as ${sizeCell.sizes.map(s => s.size).join(', ')}.`);
+      }
+      for (const s of sizeCell.sizes) {
+        valid.push({ ...r, size: s.size, stock: s.stock ?? r.stock, categorySlug: categorySlug! });
+      }
     } else {
-      valid.push({ ...r, categorySlug: categorySlug! });
+      const only = sizeCell.sizes[0];
+      valid.push({ ...r, size: only?.size ?? '', stock: only?.stock ?? r.stock, categorySlug: categorySlug! });
     }
   }
 

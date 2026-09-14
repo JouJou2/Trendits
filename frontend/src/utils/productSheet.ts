@@ -49,8 +49,8 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
     note: 'Manufacturer or label. Helps shoppers find you by brand search.' },
   { header: 'Color', key: 'color', width: 12, variant: true,
     note: 'Optional. Each colour becomes its own listing with its own photo, linked to the others so shoppers can switch between them. Only works in categories that use colours.' },
-  { header: 'Size', key: 'size', width: 9, variant: true,
-    note: 'Optional. One row per size, each with its own Stock. Only works in categories that use sizes.' },
+  { header: 'Size', key: 'size', width: 16, variant: true,
+    note: 'Optional. One size per row, or several in one cell: 40, 41, 42 — or a range like 38-45 or S-XL. Give a size its own stock with brackets: 40 (5), 41 (3). Only works in categories that use sizes.' },
   { header: 'Price', key: 'price', width: 11, required: true,
     note: 'What shoppers pay on the site. Numbers only, no $ sign. A size can have its own price.' },
   { header: 'Commission %', key: 'fees', width: 14, staffOnly: true,
@@ -234,6 +234,8 @@ export const buildProductWorkbook = async ({
         error: 'Enter digits only — no $ sign, no text. Use a dot for cents, e.g. 24.99',
       };
     }
+    // Text format, or Excel turns sizes such as 7-8 into dates and 40:5 into times.
+    sheet.getCell(`${letterOf('size')}${row}`).numFmt = '@';
     sheet.getCell(`${letterOf('stock')}${row}`).dataValidation = {
       type: 'whole', operator: 'greaterThanOrEqual', formulae: [0], allowBlank: true,
       showErrorMessage: true, errorTitle: 'Stock must be a whole number',
@@ -320,7 +322,13 @@ export const buildProductWorkbook = async ({
     line('', ''),
     section('SIZES AND COLOURS'),
     line('Simple product', 'No sizes or colours? One row, Group left blank. Done.'),
-    line('Sizes', 'One row per size. Give all of them the same Group and Title. Each size has its own Stock, and can have its own Price.'),
+    line('Sizes', 'One row per size, sharing the same Group and Title — each size can then have its own Stock and Price.'),
+    line('  Quicker', 'Or put several sizes in one Size cell. The Stock column then applies to each size.'),
+    line('  List', '40, 41, 42, 43'),
+    line('  Range', '38-45  →  38, 39, 40, 41, 42, 43, 44, 45.   7-10.5  →  half sizes 7, 7.5 … 10.5.   S-XL  →  S, M, L, XL.'),
+    line('  Own stock', '40 (5), 41 (3), 42 (0)  →  size 40 has 5 in stock, 41 has 3, 42 is sold out.'),
+    line('  Shoes example', 'Group SHOE-01 · Black · Size 38-45 · Price 60 · Stock 4  →  one listing with sizes 38 to 45, 4 pairs each.'),
+    line('  Kids\' ages', 'Two numbers one apart, like 2-3 or 10-11, stay as one size. Write 2 to 3 if you mean two sizes.'),
     line('Colours', 'Add a Color on each row. Each colour becomes its own listing with its own photo, linked so shoppers can switch colour on the product page.'),
     line('Both', 'One row per colour AND size, all sharing one Group. See the example below.'),
     line('  Example', 'Group TEE-01 · Black · M · 20 · stock 5'),
