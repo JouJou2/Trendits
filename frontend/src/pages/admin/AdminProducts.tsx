@@ -6,7 +6,7 @@ import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { importImageFromUrl, importImages } from '../../services/imageImportApi';
 import { buildProductWorkbook, downloadWorkbook, PRODUCT_COLUMNS } from '../../utils/productSheet';
-import { planImport, productsToRows, toSheetRow, type ImportPlan } from '../../utils/productImport';
+import { imageLinksOf, planImport, productsToRows, toSheetRow, type ImportPlan } from '../../utils/productImport';
 import { type CategoryRecord, categoryOptions, productInCategory } from '../../utils/categories';
 import { commissionRateOf, fetchVendorCommission } from '../../utils/commission';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
@@ -252,6 +252,7 @@ useEffect(() => {
         vendorAmount: Math.round((20 - Math.round(20 * fee) / 100) * 100) / 100,
         oldPrice: '', description: 'Soft cotton tee, regular fit.', category: exampleCategory, alsoIn: '',
         imageUrl: 'https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing',
+        moreImages: '',
         stock, featured: 'No', vendorId: lockedVendorId || '', rating: '', reviews: '',
       });
 
@@ -403,7 +404,8 @@ useEffect(() => {
 
         // Copy every referenced image into our own Storage bucket before writing
         // any product, so listings point at files we control.
-        const sourceUrls = [...new Set(sheetRows.map(r => r.imageUrl).filter(Boolean))];
+        // Several photos per product: the main Image URL cell and More Images.
+        const sourceUrls = imageLinksOf(sheetRows);
         const imageResults = new Map<string, { url?: string; error?: string }>();
 
         if (sourceUrls.length) {
@@ -414,9 +416,12 @@ useEffect(() => {
           }
           const imageToastId = toast.loading(`Importing images 0/${sourceUrls.length}...`);
           try {
-            const results = await importImages(idToken, sourceUrls, (done, total) => {
-              toast.loading(`Importing images ${done}/${total}...`, { id: imageToastId });
-            });
+            const results = await importImages(
+              idToken,
+              sourceUrls,
+              (done, total) => toast.loading(`Importing images ${done}/${total}...`, { id: imageToastId }),
+              seconds => toast.loading(`Lots of photos — pausing ${seconds}s, then carrying on...`, { id: imageToastId }),
+            );
             results.forEach((value, key) => imageResults.set(key, value));
             toast.dismiss(imageToastId);
           } catch (imageError) {

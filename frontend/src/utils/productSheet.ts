@@ -68,7 +68,9 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
   { header: 'Also In', key: 'alsoIn', width: 30,
     note: 'Optional. Other categories this product should also appear in, separated by commas — e.g. Men › Clothing, Men › Sports. Type them exactly as they appear in the Category dropdown.' },
   { header: 'Image URL', key: 'imageUrl', width: 40, required: true,
-    note: 'A Google Drive share link works, as long as the file is shared with "Anyone with the link". The image is copied into Trendit on import. For colours, put each colour\'s photo on its own rows.' },
+    note: 'The main photo, shown on product cards. A Google Drive share link works, as long as the file is shared with "Anyone with the link". The image is copied into Trendit on import. For colours, put each colour\'s photo on its own rows.' },
+  { header: 'More Images', key: 'moreImages', width: 40,
+    note: 'Optional. Extra photos for the product page gallery — paste several links separated by commas or on new lines (Alt+Enter in Excel). Up to 10 photos per product, main photo included.' },
   { header: 'Stock', key: 'stock', width: 9, required: true,
     note: 'How many units you have — per size when using sizes. 0 shows it as sold out.' },
   { header: 'Featured', key: 'featured', width: 10,
@@ -81,7 +83,7 @@ export const PRODUCT_COLUMNS: SheetColumn[] = [
     note: 'Number of customer reviews. Not editable.' },
 ];
 
-const colLetter = (index: number) => String.fromCharCode(65 + index); // A..T — 20 columns
+const colLetter = (index: number) => String.fromCharCode(65 + index); // A..U — 21 columns
 const indexOf = (key: keyof ExportRow) => PRODUCT_COLUMNS.findIndex(c => c.key === key);
 const letterOf = (key: keyof ExportRow) => colLetter(indexOf(key));
 
@@ -337,7 +339,11 @@ export const buildProductWorkbook = async ({
     line('Allowed?', 'Sizes and colours only work in categories set up for them. If a category does not use them, we import the product without and tell you.'),
     line('', ''),
     section('IMAGES'),
-    line('Image URL', 'Paste a link to the photo. A Google Drive link is fine.'),
+    line('Image URL', 'Paste a link to the main photo — the one shown on product cards. A Google Drive link is fine.'),
+    line('More Images', 'Extra photos for the product page gallery. Paste several links in the one cell, separated by commas or each on a new line (Alt+Enter in Excel).'),
+    line('  Example', 'Image URL: link-to-front-photo   ·   More Images: link-to-side-photo, link-to-back-photo, link-to-sole-photo'),
+    line('  Colours', 'Each colour is its own listing, so give each colour its own photos on its own rows.'),
+    line('  How many', 'Up to 10 photos per product, main photo included. Leaving More Images blank on an update keeps the gallery the product already has.'),
     line('  Important', 'In Drive: right-click the file → Share → General access → "Anyone with the link". Without this we cannot read the image and the product imports without a photo.'),
     line('  What happens', 'On import we copy the photo onto Trendit, so your listing keeps working even if you later move or delete the file.'),
     line('  Limits', 'JPG, PNG, WEBP, GIF or AVIF, up to 8MB each.'),

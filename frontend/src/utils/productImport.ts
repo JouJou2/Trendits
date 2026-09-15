@@ -43,7 +43,10 @@ export interface SheetRow {
    * (an older sheet), which leaves a product's existing extras untouched.
    */
   alsoIn: string | null;
+  /** The main photo link — may hold several links; the first is the main photo. */
   imageUrl: string;
+  /** Extra gallery photo links, as typed. null when the sheet has no such column. */
+  moreImages: string | null;
   stock: number | null;
   featured: boolean | null;
   vendorId: string;
@@ -85,6 +88,7 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
   };
   const text = (...names: string[]) => String(pick(...names) ?? '').trim();
   const ALSO_IN = ['Also In', 'Also Show In', 'More Categories', 'Extra Categories'];
+  const MORE_IMAGES = ['More Images', 'Extra Images', 'Additional Images', 'Gallery', 'Gallery Images'];
 
   return {
     rowNumber,
@@ -101,7 +105,8 @@ export const toSheetRow = (record: Record<string, unknown>, rowNumber: number): 
     description: text('Description'),
     category: text('Category', 'CategoryID', 'Category Id'),
     alsoIn: ALSO_IN.some(name => normalized.has(key(name))) ? text(...ALSO_IN) : null,
-    imageUrl: text('Image URL', 'ImageURL', 'Image'),
+    imageUrl: text('Image URL', 'ImageURL', 'Image', 'Main Image', 'Image URLs'),
+    moreImages: MORE_IMAGES.some(name => normalized.has(key(name))) ? text(...MORE_IMAGES) : null,
     stock: toNumber(pick('Stock', 'Quantity', 'Qty')),
     featured: toBool(pick('Featured')),
     vendorId: text('Vendor ID', 'VendorID', 'vendor_id'),
@@ -186,6 +191,35 @@ export const resolveCategoryList = (value: string, categories: CategoryRecord[])
     }
   }
   return { slugs: [...new Set(slugs)], unknown };
+};
+
+// ── Several photos per product ──────────────────────────────────────────────
+
+/** Photos one listing may carry, main photo included. */
+export const MAX_PRODUCT_IMAGES = 10;
+
+/**
+ * Pulls photo links out of a cell. Links may be separated by commas,
+ * semicolons, | , spaces or line breaks — a URL never contains an unescaped
+ * space, so any of them is safe to split on. Anything that is not a web link
+ * comes back in `notLinks` so the import report can name it.
+ */
+export const splitImageLinks = (value: string | null | undefined) => {
+  const links: string[] = [];
+  const notLinks: string[] = [];
+  for (const token of String(value ?? '').split(/[\s,;|]+/)) {
+    if (!token) continue;
+    if (/^https?:\/\/\S+$/i.test(token)) links.push(token);
+    else notLinks.push(token);
+  }
+  return { links, notLinks };
+};
+
+/** Every photo link a set of rows names, in order: Image URL cells, then More Images. */
+export const imageLinksOf = (rows: Pick<SheetRow, 'imageUrl' | 'moreImages'>[]) => {
+  const main = rows.flatMap(r => splitImageLinks(r.imageUrl).links);
+  const more = rows.flatMap(r => splitImageLinks(r.moreImages).links);
+  return [...new Set([...main, ...more])];
 };
 
 // ── Several sizes in one cell ───────────────────────────────────────────────
@@ -426,7 +460,28 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
         : lead.title;
 
       const vendorId = ctx.lockedVendorId || lead.vendorId;
-      const image = ctx.storedImage(listingRows.map(r => r.imageUrl).find(Boolean) ?? '');
+      // Photos: every link this listing's rows name, main photo first. Each
+      // colour keeps its own set, because colours are separate listings.
+      const listingLabel = `${label}${color ? ` (${color})` : ''}`;
+      const notLinks = listingRows.flatMap(r => [
+        ...splitImageLinks(r.imageUrl).notLinks,
+        ...splitImageLinks(r.moreImages).notLinks,
+      ]);
+      if (notLinks.length) {
+        warnings.push(`${listingLabel}: ignored ${notLinks.length === 1 ? 'something that is' : `${notLinks.length} things that are`} not a photo link (${notLinks.slice(0, 3).map(t => `"${t.slice(0, 40)}"`).join(', ')}) — links must start with http.`);
+      }
+      const allLinks = imageLinksOf(listingRows);
+      if (allLinks.length > MAX_PRODUCT_IMAGES) {
+        warnings.push(`${listingLabel}: ${allLinks.length} photos given; a product can have up to ${MAX_PRODUCT_IMAGES}, so the first ${MAX_PRODUCT_IMAGES} were kept.`);
+      }
+      const links = allLinks.slice(0, MAX_PRODUCT_IMAGES);
+      const stored = [...new Set(links.map(link => ctx.storedImage(link)).filter(Boolean))];
+      const failedPhotos = links.length - links.filter(link => ctx.storedImage(link)).length;
+      const image = stored[0] ?? '';
+      // The sheet speaks for the whole gallery only when it actually lists extra
+      // photos. A lone main photo on an update must not wipe gallery photos the
+      // sheet never mentioned — an older sheet, or a blank More Images cell.
+      const sheetHasGallery = links.length > 1;
 
       // Extra categories. A sheet without the column keeps whatever extras the
       // product already had, minus a main category that has just changed.
@@ -464,11 +519,15 @@ export const planImport = (rawRows: SheetRow[], ctx: ImportContext): ImportPlan 
       };
       if (groupId) data.variantGroupId = groupId;
 
-      // Image: an empty cell on an update keeps the current photo and gallery.
+      // An update with empty photo cells keeps the current photo and gallery;
+      // one with several photos replaces the gallery with them.
       if (image) data.image = image;
-      if (isNew) data.images = image ? [image] : [];
-      if (lead.imageUrl && !image) {
-        warnings.push(`${label}${color ? ` (${color})` : ''}: the image could not be imported${isNew ? ', so it was created without one' : ', so its current photo was kept'}.`);
+      if (isNew) data.images = stored;
+      else if (sheetHasGallery && stored.length) data.images = stored;
+      if (links.length && !image) {
+        warnings.push(`${listingLabel}: ${links.length === 1 ? 'the photo' : 'none of the photos'} could not be imported${isNew ? ', so it was created without one' : ', so its current photos were kept'}.`);
+      } else if (failedPhotos > 0) {
+        warnings.push(`${listingLabel}: ${failedPhotos} of ${links.length} photos could not be imported; the other ${links.length - failedPhotos} were added.`);
       }
 
       if (isNew) {
@@ -527,6 +586,8 @@ export interface ExportRow {
   /** Extra categories by label, comma separated. */
   alsoIn: string;
   imageUrl: string;
+  /** Gallery photos other than the main one, one link per line. */
+  moreImages: string;
   stock: number | string;
   featured: string;
   vendorId: string;
@@ -573,7 +634,8 @@ export const productsToRows = (
         .filter(s => s !== p.categoryId)
         .map(s => labels.get(s) || s)
         .join(', '),
-      imageUrl: p.image || '',
+      imageUrl: p.image || p.images?.[0] || '',
+      moreImages: (p.images || []).filter(url => url && url !== (p.image || p.images?.[0])).join('\n'),
       featured: p.featured ? 'Yes' : 'No',
       vendorId: lockedVendorId || p.vendorId || '',
       rating: Number(p.rating || 0),
