@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { GoogleGenAI } from '@google/genai';
+import { chatCompletion, sendAiError } from '../openai.js';
 
 type ChatRequest = {
   systemInstruction?: string;
@@ -10,31 +10,24 @@ const router = Router();
 
 router.post('/', async (req, res) => {
   const { systemInstruction, conversationHistory } = req.body as ChatRequest;
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY is not set.' });
-  }
 
   if (!systemInstruction || !conversationHistory) {
     return res.status(400).json({ error: 'Missing systemInstruction or conversationHistory.' });
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: conversationHistory,
-      config: {
-        systemInstruction,
-        temperature: 0.5,
-      },
+    // The client sends the whole conversation as one transcript, so it goes in
+    // as a single user turn with the shop rules as the system message.
+    const text = await chatCompletion({
+      messages: [
+        { role: 'system', content: systemInstruction },
+        { role: 'user', content: conversationHistory },
+      ],
+      temperature: 0.5,
     });
-
-    return res.json({ text: response.text || '' });
+    return res.json({ text });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: message });
+    return sendAiError(res, error);
   }
 });
 

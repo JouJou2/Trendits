@@ -28,7 +28,7 @@ app.get('/health', (_req, res) => {
 
 app.use('/api/chat', rateLimit({ windowMs: 60_000, max: 20, name: 'chat' }), chatRouter);
 app.use('/api/elevator-pitch', rateLimit({ windowMs: 60_000, max: 20, name: 'pitch' }), elevatorPitchRouter);
-// Admin-only product import feature — it must not be an open Gemini proxy.
+// Admin-only product import feature — it must not be an open AI proxy.
 app.use('/api/analyze-image', rateLimit({ windowMs: 60_000, max: 10, name: 'image' }), requireAuth({ staffOnly: true }), analyzeImageRouter);
 app.use('/api/2fa', rateLimit({ windowMs: 15 * 60_000, max: 10, name: '2fa' }), twoFactorRouter);
 app.use('/api/signup', rateLimit({ windowMs: 15 * 60_000, max: 10, name: 'signup' }), signupRouter);
