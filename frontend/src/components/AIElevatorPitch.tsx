@@ -4,23 +4,20 @@ import { motion } from 'motion/react';
 import { fetchElevatorPitch } from '../services/aiBackend';
 
 interface AIElevatorPitchProps {
-  productTitle: string;
-  productDescription: string;
-  brand: string;
+  /** The server reads the product's own details from this id. */
+  productId: string;
 }
 
-export const AIElevatorPitch: React.FC<AIElevatorPitchProps> = ({
-  productTitle,
-  productDescription,
-  brand
-}) => {
+export const AIElevatorPitch: React.FC<AIElevatorPitchProps> = ({ productId }) => {
   const [pitch, setPitch] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!productId) return;
+    let cancelled = false;
     const generatePitch = async () => {
       try {
-        const response = await fetchElevatorPitch(productTitle, productDescription, brand);
-        if (response.text) {
+        const response = await fetchElevatorPitch(productId);
+        if (!cancelled && response.text) {
           setPitch(response.text.trim());
         }
       } catch (error) {
@@ -29,7 +26,8 @@ export const AIElevatorPitch: React.FC<AIElevatorPitchProps> = ({
     };
 
     generatePitch();
-  }, [productTitle, productDescription, brand]);
+    return () => { cancelled = true; };
+  }, [productId]);
 
   // Only render once we actually have a pitch — no loading flash that then
   // disappears on failure (e.g. API quota exhausted), which left a visible gap.

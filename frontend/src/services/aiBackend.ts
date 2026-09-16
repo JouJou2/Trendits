@@ -18,11 +18,18 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export const fetchChatReply = (systemInstruction: string, conversationHistory: string) =>
-  postJson<{ text: string }>('/api/chat', { systemInstruction, conversationHistory });
+/**
+ * The chatbot sends only what the shopper typed plus the recent turns. The
+ * assistant's instructions and the product data live on the server: anything
+ * sent from here could be replaced by whoever is using the browser, which is
+ * how the chatbot ended up writing code for people on the store's credit.
+ */
+export const fetchChatReply = (message: string, history: { role: 'user' | 'assistant'; content: string }[]) =>
+  postJson<{ text: string }>('/api/chat', { message, history });
 
-export const fetchElevatorPitch = (productTitle: string, productDescription: string, brand: string) =>
-  postJson<{ text: string }>('/api/elevator-pitch', { productTitle, productDescription, brand });
+/** The server reads the product itself, so only its id is sent. */
+export const fetchElevatorPitch = (productId: string) =>
+  postJson<{ text: string }>('/api/elevator-pitch', { productId });
 
 // Staff-only on the server (it spends AI credit), so the caller's ID token
 // must be attached — the backend re-reads the role from Firestore to authorise.

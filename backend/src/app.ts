@@ -26,8 +26,18 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.use('/api/chat', rateLimit({ windowMs: 60_000, max: 20, name: 'chat' }), chatRouter);
-app.use('/api/elevator-pitch', rateLimit({ windowMs: 60_000, max: 20, name: 'pitch' }), elevatorPitchRouter);
+// Both AI routes are open to anonymous shoppers and cost real money per call,
+// so each carries a burst limit and a daily ceiling per address. The prompts
+// live on the server (see routes/chat.ts) — these limits cap what abuse of a
+// legitimate shopping question can cost.
+app.use('/api/chat',
+  rateLimit({ windowMs: 60_000, max: 12, name: 'chat' }),
+  rateLimit({ windowMs: 24 * 60 * 60_000, max: 120, name: 'chat-day' }),
+  chatRouter);
+app.use('/api/elevator-pitch',
+  rateLimit({ windowMs: 60_000, max: 20, name: 'pitch' }),
+  rateLimit({ windowMs: 24 * 60 * 60_000, max: 200, name: 'pitch-day' }),
+  elevatorPitchRouter);
 // Admin-only product import feature — it must not be an open AI proxy.
 app.use('/api/analyze-image', rateLimit({ windowMs: 60_000, max: 10, name: 'image' }), requireAuth({ staffOnly: true }), analyzeImageRouter);
 app.use('/api/2fa', rateLimit({ windowMs: 15 * 60_000, max: 10, name: '2fa' }), twoFactorRouter);

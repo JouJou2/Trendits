@@ -33,25 +33,9 @@ const cleanTextOfProductTags = (text: string): string => {
   return text.replace(/\[PRODUCT_ID:\s*["']?[a-zA-Z0-9_-]+["']?\]/gi, '').trim();
 };
 
-/**
- * Picks the products worth sending to the model for this question. Shipping the
- * whole catalog on every message burns tokens and scales badly as vendors add
- * stock, so we send keyword matches first and fall back to a small sample.
- */
-const selectRelevantProducts = (catalog: ProductType[], userMessage: string, max = 12): ProductType[] => {
-  const words = userMessage.toLowerCase().split(/[^a-z0-9]+/i).filter(w => w.length > 2);
-  if (words.length === 0) return catalog.slice(0, max);
-
-  const scored = catalog
-    .map(p => {
-      const haystack = `${p.title} ${p.brand} ${p.categoryId}`.toLowerCase();
-      return { p, score: words.filter(w => haystack.includes(w)).length };
-    })
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  return scored.length > 0 ? scored.slice(0, max).map(x => x.p) : catalog.slice(0, 8);
-};
+// Picking which products the model sees now happens on the server (see
+// backend/src/catalog.ts). The catalog is still loaded here for the product
+// cards in replies and the offline fallback below.
 
 export const Chatbot = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -113,31 +97,15 @@ export const Chatbot = () => {
       let modelReply = '';
 
       try {
-        // Only the products relevant to this question, not the whole catalog.
-        const catalogData = selectRelevantProducts(catalog, userMessage).map(p =>
-          `ID:${p.id} Name:"${p.title}" Price:$${p.price} Brand:"${p.brand}" Category:"${p.categoryId}"`
-        ).join(' | ');
+        // Just the conversation. The assistant's instructions and the product
+        // data are the server's — sending them from here let anyone swap them
+        // out and use the store's AI credit for their own purposes.
+        const history = messages.slice(-6).map(msg => ({
+          role: msg.role === 'user' ? ('user' as const) : ('assistant' as const),
+          content: msg.content,
+        }));
 
-        const systemInstruction = `You are the official customer support chatbot for "Trendit", a modern multi-vendor marketplace in Lebanon.
-
-        Personality: Professional, concise, warm, helpful, data-driven. Do NOT generate overly long massive paragraphs. Use lists where appropriate.
-
-        You have access to the platform's current data.
-        Our products: ${catalogData}
-
-        Rules:
-        1. Answer questions about these specific products, vendors, and marketplace policies.
-        2. If a customer asks for a product not in the catalog, let them know politely we don't have it currently.
-        3. For questions about orders, pretend to check and say you need an Order ID, then ask them to email support@trendit.com.
-        4. Crucial Recommendation Rule: Whenever you mention, suggest, recommend, or refer to any products in the catalog in your response, you MUST append a tag in the exact format: [PRODUCT_ID: <id>] for each product you recommend at the very end of your final sentence. For example: "I highly recommend the premium leather jacket [PRODUCT_ID: 1] as a great choice for style." or "Here is the iPhone 15 [PRODUCT_ID: 101]." This tag is parsed by our UI to show interactive product cards with images and links. Always include it when referencing a specific item.
-        `;
-
-        // Pass conversation history to API
-        const conversationHistory = messages.map(msg =>
-          `${msg.role === 'user' ? 'Customer' : 'Trendit Support'}: ${msg.content}`
-        ).join('\n') + `\nCustomer: ${userMessage}\nTrendit Support:`;
-
-        const response = await fetchChatReply(systemInstruction, conversationHistory);
+        const response = await fetchChatReply(userMessage, history);
         modelReply = response.text || "I'm sorry, I encountered an error pulling up that information. Please try again.";
       } catch (backendError) {
         // Safe smart dynamic search fallback when the AI backend is unreachable/unconfigured

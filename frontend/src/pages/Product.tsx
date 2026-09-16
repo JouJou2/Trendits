@@ -589,11 +589,7 @@ export const Product = () => {
           )}
 
           {/* AI SMART SUMMARY */}
-          <AIElevatorPitch
-            productTitle={product.title}
-            productDescription={product.description}
-            brand={product.brand}
-          />
+          <AIElevatorPitch productId={String(product.id)} />
 
           {/* Options */}
           <div className="space-y-8 mb-10">
