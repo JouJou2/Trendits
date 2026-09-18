@@ -21,7 +21,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { allProducts, ProductType, Vendor, LEBANON_ZONES } from '../data/products';
 import { collection, onSnapshot, query, limit, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { type CategoryRecord, topLevelCategories, productInCategory, productCategorySlugs } from '../utils/categories';
+import { type CategoryRecord, productInCategory, productCategorySlugs } from '../utils/categories';
+import { useShopCategories } from '../hooks/useShopCategories';
 import { ProductCard } from '../components/ProductCard';
 import { ProductCardSkeleton } from '../components/Skeletons';
 import { motion, AnimatePresence } from 'motion/react';
@@ -187,7 +188,7 @@ const CategoryCircles = ({ categories, counts }: { categories: { id: string; nam
               </div>
               <div className="text-center w-full">
                 <p className="text-[11px] md:text-sm font-bold text-slate-800 group-hover:text-primary transition-colors truncate leading-tight">{cat.name}</p>
-                <p className="text-[11px] md:text-[11px] text-slate-400 leading-tight">{counts[cat.slug] || 0} items</p>
+                <p className="text-[11px] md:text-[11px] text-slate-400 leading-tight">{counts[cat.slug] || 0} {counts[cat.slug] === 1 ? 'item' : 'items'}</p>
               </div>
             </Link>
           ))}
@@ -735,16 +736,10 @@ export const Home = () => {
     return filtered.length > 0 ? filtered : newArrivals;
   }, [allProductsList, topVendors, newArrivals]);
 
-  // How many products sit in each category, for the "Shop by Category" row.
-  // A main category's number includes its subcategories, so "Electronics" does
-  // not read 0 items when everything is filed under Electronics › Men.
-  const categoryProductCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const cat of categoryList) {
-      counts[cat.slug] = allProductsList.filter(p => productInCategory(p, cat.slug, categoryList)).length;
-    }
-    return counts;
-  }, [allProductsList, categoryList]);
+  // The "Shop by Category" row: main categories that have products, with
+  // counts that include their subcategories. Empty ones are left out so no
+  // tile leads to an empty page.
+  const { visibleTopLevel: shopCategories, counts: categoryProductCounts } = useShopCategories();
 
   // Personalized picks based on the visitor's own recent searches
   const justForYou = useMemo(() => {
@@ -809,7 +804,7 @@ export const Home = () => {
     <main className="pb-24">
       <SEO />
       <HeroCarousel banners={banners} />
-      <CategoryCircles categories={topLevelCategories(categoryList)} counts={categoryProductCounts} />
+      <CategoryCircles categories={shopCategories} counts={categoryProductCounts} />
 
       {featuredItems.length > 0 && (
         <ProductGridSection

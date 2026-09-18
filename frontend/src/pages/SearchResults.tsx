@@ -240,6 +240,13 @@ export const SearchResults = () => {
     onSale: dealParam
   });
 
+  // Category filters worth offering: ones with products. A ticked category
+  // stays listed so it can be unticked.
+  const filterCategories = useMemo(() => categories.filter(cat =>
+    filters.categories.includes(cat.slug)
+    || realProducts.some(p => productInCategory(p, cat.slug, categories)),
+  ), [categories, realProducts, filters.categories]);
+
   // Fetch products and categories
   useEffect(() => {
     setLoading(true);
@@ -636,7 +643,7 @@ export const SearchResults = () => {
         <aside className="hidden lg:block">
           <FilterSidebar
             loading={loading}
-            categories={categories}
+            categories={filterCategories}
             brands={brands}
             filters={filters}
             setFilters={setFilters}
@@ -676,7 +683,7 @@ export const SearchResults = () => {
                 <FilterSidebar
                   isMobile
                   loading={loading}
-                  categories={categories}
+                  categories={filterCategories}
                   brands={brands}
                   filters={filters}
                   setFilters={setFilters}

@@ -154,6 +154,13 @@ export const Category = () => {
   }, [querySlugsKey]);
 
   // Derive available brands for this category
+  // Subcategory filters that would show something — an empty one would just
+  // lead the shopper to "No products found".
+  const visibleSubcategories = useMemo(() => meta.subcategories.filter(sub => {
+    const slug = sub.slug.toLowerCase();
+    return dbProducts.some(p => productCategorySlugs(p).includes(slug));
+  }), [meta.subcategories, dbProducts]);
+
   const availableBrands = useMemo(() => {
     const brands = dbProducts.map(p => p.brand);
     return Array.from(new Set(brands)).sort();
@@ -359,7 +366,8 @@ export const Category = () => {
             <ChevronDown className={`w-3 h-3 transition-transform duration-300 ${activeFilterTab === 'sort' ? 'rotate-180' : ''}`} />
           </button>
 
-          {/* SUBCATEGORY PILL */}
+          {/* SUBCATEGORY PILL — only when there is a subcategory worth picking */}
+          {visibleSubcategories.length > 0 && (
           <button
             onClick={() => setActiveFilterTab(activeFilterTab === 'subcategory' ? null : 'subcategory')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] font-bold uppercase tracking-wide border transition-all cursor-pointer whitespace-nowrap select-none ${activeFilterTab === 'subcategory' ? 'bg-primary border-primary text-white shadow-md' : selectedSubcategory !== null ? 'bg-blue-50/80 border-blue-200 text-primary' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
@@ -367,6 +375,7 @@ export const Category = () => {
             <span>{meta.subcategories.find(sc => sc.slug === selectedSubcategory)?.name || 'All Items'}</span>
             <ChevronDown className={`w-3 h-3 transition-transform duration-300 ${activeFilterTab === 'subcategory' ? 'rotate-180' : ''}`} />
           </button>
+          )}
 
           {/* BRAND PILL */}
           <button
@@ -476,7 +485,7 @@ export const Category = () => {
                 >
                   All Arrivals
                 </button>
-                {meta.subcategories.map(sub => (
+                {visibleSubcategories.map(sub => (
                   <button
                     key={sub.slug}
                     onClick={() => {

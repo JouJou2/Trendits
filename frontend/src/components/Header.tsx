@@ -7,19 +7,10 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { useWishlist } from '../hooks/useWishlist';
+import { useShopCategories } from '../hooks/useShopCategories';
 import { collection, query, limit, getDocs, orderBy, addDoc, serverTimestamp, where, onSnapshot, updateDoc, doc, writeBatch } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { motion, AnimatePresence } from 'motion/react';
-
-interface Category {
-  id: string;
-  name: string;
-  slug: string;
-  image?: string;
-  type?: 'main' | 'other';
-  /** Set on subcategories; the mobile menu lists main categories only. */
-  parentId?: string | null;
-}
 
 interface SearchSuggestion {
   id: string;
@@ -72,8 +63,13 @@ export const Header = () => {
   const [searching, setSearching] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  // Only categories that have products, and main categories only in the bar
+  // and menu — the bar used to show the first 30 of everything, subcategories
+  // included, empty or not.
+  const {
+    ready: categoriesReady, all: allCategories, visibleTopLevel: shopCategories, visibleAll: searchableCategories,
+  } = useShopCategories();
+  const categoriesLoading = !categoriesReady;
   const [hasDeals, setHasDeals] = useState(false);
   const [dealsLoading, setDealsLoading] = useState(true);
   const [trendingSearches, setTrendingSearches] = useState<string[]>([]);
@@ -134,23 +130,6 @@ export const Header = () => {
       }
     }
   };
-
-  // Fetch categories
-  useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        const q = query(collection(db, 'categories'), limit(30));
-        const snap = await getDocs(q);
-        const cats = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category));
-        setCategories(cats);
-      } catch (err) {
-        console.error('Failed to fetch categories:', err);
-      } finally {
-        setCategoriesLoading(false);
-      }
-    };
-    fetchCategories();
-  }, []);
 
   // Check for deals
   useEffect(() => {
@@ -270,7 +249,7 @@ export const Header = () => {
       setSearching(true);
       try {
         // Category matches
-        const matchingCategories = categories.filter(cat =>
+        const matchingCategories = searchableCategories.filter(cat =>
           cat.name.toLowerCase().includes(trimmedQuery) ||
           cat.slug.toLowerCase().includes(trimmedQuery)
         ).slice(0, 3);
@@ -320,7 +299,7 @@ export const Header = () => {
 
     const timer = setTimeout(buildSuggestions, 150);
     return () => clearTimeout(timer);
-  }, [searchQuery, categories, recentSearches, trendingSearches]);
+  }, [searchQuery, searchableCategories, recentSearches, trendingSearches]);
 
   // Click outside to close
   useEffect(() => {
@@ -521,7 +500,7 @@ export const Header = () => {
               )}
               <div className="border-t border-slate-100 my-2" />
               <p className="px-4 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Shop by Category</p>
-              {categories.filter(cat => !cat.parentId).map((cat) => (
+              {shopCategories.map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => { handleCategoryClick(cat.slug); setMobileMenuOpen(false); }}
@@ -765,7 +744,7 @@ export const Header = () => {
                   <span className="text-[13px] text-slate-400">Loading...</span>
                 </div>
               ) : (
-                categories.map((cat) => {
+                shopCategories.map((cat) => {
                   const isActive = activeCategory === cat.slug && isHomePage;
                   return (
                     <button
@@ -777,9 +756,8 @@ export const Header = () => {
                           : 'text-slate-600 hover:text-blue-600 hover:bg-blue-50/50'
                       }`}
                     >
-                      {cat.image && (
-                        <img src={cat.image} alt="" className="w-4 h-4 rounded object-cover" />
-                      )}
+                      {/* Text only: an icon on just the categories that had a
+                          photo made the bar look uneven. */}
                       <span>{cat.name}</span>
                       {isActive && (
                         <span className="w-1.5 h-1.5 bg-blue-600 rounded-full ml-0.5" />
@@ -799,7 +777,7 @@ export const Header = () => {
               <div className="flex items-center gap-2">
                 <span className="text-xs text-slate-500">Browsing:</span>
                 <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
-                  {categories.find(c => c.slug === activeCategory)?.name || activeCategory}
+                  {allCategories.find(c => c.slug === activeCategory)?.name || activeCategory}
                 </span>
               </div>
               <button

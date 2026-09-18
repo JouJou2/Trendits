@@ -1,62 +1,47 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ArrowRight, Loader2, Tag } from 'lucide-react';
 import { motion, Variants } from 'motion/react';
-import { useEffect, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { useShopCategories } from '../hooks/useShopCategories';
 
 const containerVariants: Variants = {
   hidden: { opacity: 0 },
   visible: {
     opacity: 1,
-    transition: { staggerChildren: 0.1 }
+    transition: { staggerChildren: 0.05 }
   }
 };
 
 const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 20 },
+  hidden: { opacity: 0, y: 16 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.5, ease: "easeOut" }
+    transition: { duration: 0.4, ease: "easeOut" }
   }
 };
 
+// Tint behind a category that has no photo, so it reads as a designed tile
+// rather than a broken "No Image" placeholder.
+const TILE_TINTS = [
+  'from-blue-50 to-indigo-100 text-blue-300',
+  'from-rose-50 to-pink-100 text-rose-300',
+  'from-amber-50 to-orange-100 text-amber-300',
+  'from-emerald-50 to-teal-100 text-emerald-300',
+  'from-violet-50 to-purple-100 text-violet-300',
+  'from-cyan-50 to-sky-100 text-cyan-300',
+];
 
+/** How many subcategory names a card lists before "+N more". */
+const SUBCATEGORY_PREVIEW = 4;
 
 export const CategoriesPage = () => {
-  const [categories, setCategories] = useState<{id: string; name: string; image: string; slug: string; type?: 'main' | 'other'; parentId?: string | null}[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [retryKey, setRetryKey] = useState(0);
+  // Only categories with products — an empty one would lead to a page that
+  // says "No products found". Every card is drawn the same way; there used to
+  // be giant photo boxes for "main" categories and small cards for the rest.
+  const { ready, counts, visibleTopLevel, visibleChildrenOf } = useShopCategories();
 
-  useEffect(() => {
-    setLoading(true);
-    setError(false);
-    const unsub = onSnapshot(collection(db, 'categories'), (snap) => {
-      setCategories(snap.docs.map(d => ({ id: d.id, ...d.data() } as any)));
-      setLoading(false);
-      setError(false);
-    }, (err) => {
-      console.error('Failed to load categories:', err);
-      setLoading(false);
-      setError(true);
-    });
-    return () => unsub();
-  }, [retryKey]);
-
-// Only main categories get their own card; subcategories are listed on it.
-const topLevel = categories.filter(c => !c.parentId);
-const subcategoriesOf = (parentId: string) =>
-  categories
-    .filter(c => c.parentId === parentId)
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-    .map(c => ({ ...c, path: `/category/${c.slug}` }));
-const mainCategories = topLevel.filter(c => c.type === 'main').map(c => ({ ...c, path: `/category/${c.slug}` }));
-const otherCategories = topLevel.filter(c => c.type === 'other' || !c.type).map(c => ({ ...c, path: `/category/${c.slug}` }));
-
-  if (loading) {
+  if (!ready) {
     return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 flex flex-col items-center justify-center gap-4 text-center">
         <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
@@ -65,23 +50,7 @@ const otherCategories = topLevel.filter(c => c.type === 'other' || !c.type).map(
     );
   }
 
-  if (error) {
-    return (
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 flex flex-col items-center justify-center gap-4 text-center">
-        <AlertTriangle className="w-10 h-10 text-red-400" />
-        <p className="font-bold text-slate-700">Couldn't load categories</p>
-        <p className="text-sm text-slate-400 max-w-sm">Something went wrong while fetching categories. Please check your connection and try again.</p>
-        <button
-          onClick={() => setRetryKey(k => k + 1)}
-          className="flex items-center gap-2 bg-blue-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-wider hover:bg-blue-700 transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" /> Try Again
-        </button>
-      </main>
-    );
-  }
-
-  if (categories.length === 0) {
+  if (visibleTopLevel.length === 0) {
     return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
         <p className="font-bold text-slate-500 mb-1">No categories yet</p>
@@ -91,115 +60,80 @@ const otherCategories = topLevel.filter(c => c.type === 'other' || !c.type).map(
   }
 
   return (
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <motion.div 
+    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 md:py-12">
+      <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
-        className="mb-12"
+        className="mb-8 md:mb-10"
       >
         <p className="text-slate-500 font-medium text-lg">Explore our curated collections of premium goods.</p>
       </motion.div>
 
-      {/* Top Main Categories */}
-      <motion.div 
+      <motion.div
         initial="hidden"
         animate="visible"
         variants={containerVariants}
-        className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-20"
+        className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6"
       >
-        {mainCategories.map((cat) => (
-          <motion.div key={cat.id} variants={itemVariants}>
-            <Link 
-              to={cat.path} 
-              className="relative h-80 rounded-[3rem] overflow-hidden group shadow-2xl shadow-blue-900/5 block"
+        {visibleTopLevel.map((cat, idx) => {
+          const path = `/category/${cat.slug}`;
+          const subs = visibleChildrenOf(cat);
+          const count = counts[cat.slug] || 0;
+          return (
+            <motion.div
+              key={cat.id}
+              variants={itemVariants}
+              className="group bg-white rounded-3xl border border-slate-100 overflow-hidden flex flex-col hover:border-blue-100 hover:shadow-xl hover:shadow-blue-900/5 transition-all"
             >
-              <img 
-                src={cat.image || 'https://placehold.co/600x600?text=No+Image'} 
-                alt={cat.name} 
-                className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 brightness-90 group-hover:brightness-100"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/20 to-transparent flex items-end p-8">
-                <div className="text-white w-full">
-                  <div className="flex justify-between items-end">
-                    <div>
-                      <span className="text-[11px] font-bold tracking-[0.2em] uppercase opacity-70 mb-2 block">Lifestyle</span>
-                      <h2 className="text-3xl font-bold font-display italic tracking-tight">{cat.name.toUpperCase()}</h2>
+              <Link to={path} className="block">
+                <div className="aspect-[4/3] relative overflow-hidden">
+                  {cat.image ? (
+                    <img
+                      src={cat.image}
+                      alt={cat.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : (
+                    <div className={`w-full h-full bg-gradient-to-br ${TILE_TINTS[idx % TILE_TINTS.length]} flex items-center justify-center`}>
+                      <Tag className="w-10 h-10 md:w-12 md:h-12" />
                     </div>
-                    <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all">
-                      <ArrowRight className="h-6 w-6 text-white" />
-                    </div>
-                  </div>
+                  )}
                 </div>
-              </div>
-            </Link>
-            {subcategoriesOf(cat.id).length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-4 px-2">
-                {subcategoriesOf(cat.id).map(sub => (
-                  <Link
-                    key={sub.id}
-                    to={sub.path}
-                    className="px-3.5 py-1.5 rounded-full bg-white border border-slate-200 text-xs font-semibold text-slate-600 hover:border-blue-300 hover:text-blue-600 transition-colors"
-                  >
-                    {sub.name}
-                  </Link>
-                ))}
-              </div>
-            )}
-          </motion.div>
-        ))}
-      </motion.div>
+                <div className="px-4 pt-3.5 pb-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="font-bold text-slate-900 text-sm md:text-base leading-tight truncate group-hover:text-blue-600 transition-colors">
+                      {cat.name}
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {count} {count === 1 ? 'product' : 'products'}
+                    </p>
+                  </div>
+                  <span className="w-8 h-8 shrink-0 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    <ArrowRight className="w-4 h-4" />
+                  </span>
+                </div>
+              </Link>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        whileInView={{ opacity: 1 }}
-        viewport={{ once: true }}
-        className="mb-8 flex items-center gap-4"
-      >
-        <h2 className="text-2xl font-bold text-slate-900 font-display italic tracking-tight uppercase">More Categories</h2>
-        <div className="h-px bg-slate-100 flex-1"></div>
-      </motion.div>
-      
-      {/* Other Categories Grid */}
-      <motion.div 
-        initial="hidden"
-        whileInView="visible"
-        viewport={{ once: true }}
-        variants={containerVariants}
-        className="grid grid-cols-2 md:grid-cols-4 gap-6"
-      >
-        {otherCategories.map((cat) => (
-          <motion.div key={cat.id} variants={itemVariants}>
-            <Link 
-              to={cat.path} 
-              className="bg-white/60 backdrop-blur-xl rounded-[2rem] border border-white p-5 flex flex-col items-center justify-center hover:shadow-2xl hover:shadow-blue-600/5 transition-all group border-transparent hover:border-blue-100"
-            >
-              <div className="w-full h-40 mb-5 overflow-hidden rounded-[1.5rem] relative">
-                <img 
-                  src={cat.image || 'https://placehold.co/600x600?text=No+Image'} 
-                  alt={cat.name} 
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                />
-                <div className="absolute inset-0 bg-blue-600/10 mix-blend-overlay opacity-0 group-hover:opacity-100 transition-opacity"></div>
-              </div>
-              <span className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors uppercase text-xs tracking-wide italic">
-                {cat.name}
-              </span>
-            </Link>
-            {subcategoriesOf(cat.id).length > 0 && (
-              <div className="flex flex-wrap justify-center gap-1.5 mt-3">
-                {subcategoriesOf(cat.id).map(sub => (
-                  <Link
-                    key={sub.id}
-                    to={sub.path}
-                    className="px-2.5 py-1 rounded-full bg-slate-50 text-[11px] font-semibold text-slate-500 hover:text-blue-600 transition-colors"
-                  >
-                    {sub.name}
-                  </Link>
-                ))}
-              </div>
-            )}
-          </motion.div>
-        ))}
+              {subs.length > 0 && (
+                <p className="px-4 pb-4 text-xs text-slate-500 leading-relaxed">
+                  {subs.slice(0, SUBCATEGORY_PREVIEW).map((sub, i) => (
+                    <React.Fragment key={sub.id}>
+                      {i > 0 && <span className="text-slate-300"> · </span>}
+                      <Link to={`/category/${sub.slug}`} className="hover:text-blue-600 transition-colors">
+                        {sub.name}
+                      </Link>
+                    </React.Fragment>
+                  ))}
+                  {subs.length > SUBCATEGORY_PREVIEW && (
+                    <Link to={path} className="text-blue-600 font-semibold whitespace-nowrap">
+                      {' '}+{subs.length - SUBCATEGORY_PREVIEW} more
+                    </Link>
+                  )}
+                </p>
+              )}
+            </motion.div>
+          );
+        })}
       </motion.div>
     </main>
   );
