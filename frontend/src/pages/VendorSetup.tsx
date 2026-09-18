@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { signInWithCustomToken } from 'firebase/auth';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import {
   ArrowLeft, ArrowRight, Check, Loader2, Store, Image as ImageIcon,
   ShieldCheck, MapPin, Mail, AlertCircle, PartyPopper, Upload, X,
@@ -167,8 +167,14 @@ export const VendorSetup: React.FC = () => {
         logo: form.logo,
         banner: form.banner,
       });
-      // Signs them in immediately — no second login after finishing the wizard.
-      await signInWithCustomToken(auth, result.customToken);
+      // Signs them in with what they just chose — no second login after
+      // finishing the wizard. The store is already saved at this point, so a
+      // sign-in hiccup must not be shown as a failed setup.
+      try {
+        await signInWithEmailAndPassword(auth, result.email, form.password);
+      } catch (signInError) {
+        console.warn('Store created, but automatic sign-in failed:', signInError);
+      }
       setDone(true);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');

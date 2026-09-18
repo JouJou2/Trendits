@@ -122,7 +122,10 @@ vendorInviteRouter.post('/invite', requireAuth({ staffOnly: true }), async (req:
     } catch {
       const created = await adminAuth.createUser({
         email: emailLower,
-        password: randomBytes(32).toString('base64url'),
+        // Random, then padded so it always meets the project's password
+        // policy (upper, lower, digit, symbol) — plain base64url sometimes had
+        // no symbol, and Firebase refused to create the account.
+        password: `${randomBytes(32).toString('base64url')}Aa1!`,
         emailVerified: false,
       });
       uid = created.uid;
@@ -255,12 +258,17 @@ vendorInviteRouter.post('/invite/complete', rateLimit({ windowMs: 60_000, max: 1
     // immediately challenge someone who just proved themselves via the invite.
     await adminAuth.setCustomUserClaims(invite.uid, { tfaVerifiedAt: Date.now() });
 
-    // Signs them straight in at the end of the wizard.
-    const customToken = await adminAuth.createCustomToken(invite.uid);
-
-    return res.json({ customToken, storeName, email: invite.emailLower });
+    // The page signs them in with the email and the password they just chose.
+    // It used to be a custom token, but minting one needs an IAM permission
+    // (signBlob) the function's account does not have, so every setup saved
+    // the store and then answered with an error.
+    return res.json({ ok: true, storeName, email: invite.emailLower });
   } catch (err) {
     console.error('Vendor setup failed:', err);
+    // Release the invite so the vendor can try again — every step above is
+    // safe to repeat, and a claimed-but-failed invite would lock them out.
+    await adminDb.collection(INVITES).doc(inviteId).update({ usedAt: null })
+      .catch(releaseErr => console.error('Could not release the invite after a failed setup:', releaseErr));
     const message = err instanceof Error && /image/i.test(err.message) ? err.message : 'Could not finish setting up the store.';
     return res.status(500).json({ error: message });
   }

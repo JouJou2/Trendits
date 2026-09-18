@@ -55,7 +55,7 @@ export interface VendorSetupPayload {
 
 /** Vendor: finishes setup. Returns a custom token used to sign them straight in. */
 export const completeVendorSetup = (payload: VendorSetupPayload) =>
-  post<{ customToken: string; storeName: string; email: string }>('/api/vendors/invite/complete', payload);
+  post<{ ok: boolean; storeName: string; email: string }>('/api/vendors/invite/complete', payload);
 
 /** Sends a reset link to the store's recovery email rather than its login inbox. */
 export const requestVendorPasswordReset = (email: string) =>
