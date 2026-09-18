@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Store, Upload, Loader2, AlertCircle, X, ImageIcon, ShieldCheck, BadgeCheck, Clock } from 'lucide-react';
+import { Store, Upload, Loader2, AlertCircle, X, ImageIcon, ShieldCheck, BadgeCheck, Clock, Eye } from 'lucide-react';
 import { doc, setDoc, collection, query, where, onSnapshot, addDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -204,10 +204,21 @@ export const VendorProfileSetup = () => {
           <div className="p-3 bg-blue-50 rounded-lg">
             <Store className="w-6 h-6 text-blue-600" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-slate-900">Complete Your Vendor Profile</h1>
             <p className="text-slate-500 text-sm mt-1">Set up your store to start selling products</p>
           </div>
+          {vendorProfile?.id && (
+            <a
+              href={`/vendor/${vendorProfile.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+              title="Open your store page as customers see it"
+            >
+              <Eye className="w-4 h-4" /> Preview store
+            </a>
+          )}
         </div>
 
         {!vendorProfile && (

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { MapPin, Calendar, Package, Star, Share2, Filter, Grid, List as ListIcon, X, ChevronDown, Loader2, BadgeCheck, Heart } from 'lucide-react';
+import { MapPin, Calendar, Package, Star, Share2, Filter, Grid, List as ListIcon, X, ChevronDown, Loader2, BadgeCheck, Heart, Eye } from 'lucide-react';
 import { getDisplayPrice, ProductType } from '../data/products';
 import { motion, AnimatePresence } from 'motion/react';
 import { collection, onSnapshot, query, where, doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
@@ -26,7 +26,9 @@ interface VendorData {
 
 export const VendorProfile = () => {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, vendorId: myVendorId, vendorProfile: myVendorProfile } = useAuth();
+  // The store's owner, previewing it from the dashboard's "View my store".
+  const isOwnStore = Boolean(id && myVendorId && id === myVendorId);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
   const [realProducts, setRealProducts] = useState<ProductType[]>([]);
@@ -213,6 +215,32 @@ export const VendorProfile = () => {
 
   return (
     <div className="min-h-screen pb-16">
+      {/* Owner preview bar — only the store's owner sees this; customers get
+          the page exactly as below it. */}
+      {isOwnStore && (
+        <div className="bg-slate-900 text-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-sm flex-1 flex items-center gap-2">
+              <Eye className="w-4 h-4 text-blue-400 shrink-0" />
+              <span>
+                This is how customers see your store.
+                {myVendorProfile?.status && myVendorProfile.status !== 'active' && (
+                  <span className="text-amber-300"> It is awaiting approval, so customers can't buy from it yet.</span>
+                )}
+              </span>
+            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link to="/admin/profile" className="text-xs font-bold px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors">
+                Edit profile
+              </Link>
+              <Link to="/admin" className="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors">
+                Back to dashboard
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Banner */}
       <div className="h-60 md:h-80 w-full relative overflow-hidden">
         <img 

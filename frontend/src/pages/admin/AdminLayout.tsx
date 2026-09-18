@@ -4,7 +4,7 @@ import {
   LayoutDashboard, ShoppingBag, FolderTree, ShoppingCart,
   Users, Store, Megaphone, Star, BarChart3,
   DollarSign, Settings, Globe,
-  LogOut, Bell, Menu, X, ShieldCheck, MessageSquare, HelpCircle, Image, Loader2
+  LogOut, Bell, Menu, X, ShieldCheck, MessageSquare, HelpCircle, Image, Loader2, Eye, ExternalLink
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, limit } from 'firebase/firestore';
 import { db } from '../../services/firebase';
@@ -15,8 +15,11 @@ import { toast } from 'react-hot-toast';
 export const AdminLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [newOrdersCount, setNewOrdersCount] = useState(0);
-const { user, loading, isAdmin, isVendor, isSuperAdmin, vendorProfile, logout } = useAuth();
+const { user, loading, isAdmin, isVendor, isSuperAdmin, vendorId, vendorProfile, logout } = useAuth();
   const isAdminView = isAdmin || isSuperAdmin;
+  // A vendor's own public page, exactly as customers see it. Opened in a new
+  // tab so the dashboard stays where they left it.
+  const myStoreUrl = !isAdminView && vendorId ? `/vendor/${vendorId}` : null;
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -189,6 +192,19 @@ if (isProfileIncomplete && !isOnProfilePage) {
               )}
             </NavLink>
           ))}
+          {myStoreUrl && (
+            <a
+              href={myStoreUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setSidebarOpen(false)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-300 hover:bg-slate-800 hover:text-white"
+            >
+              <Eye className="w-5 h-5 text-slate-400" />
+              <span className="flex-1">View my store</span>
+              <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+            </a>
+          )}
         </div>
 
         <div className="p-4 border-t border-slate-800">
@@ -227,13 +243,26 @@ if (isProfileIncomplete && !isOnProfilePage) {
           </div>
           
           <div className="flex items-center gap-3 sm:gap-4">
-            <a 
-              href="/" 
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 transition-all shadow-sm active:scale-95 hidden sm:flex"
-            >
-              <Globe className="w-4 h-4" />
-              View Store
-            </a>
+            {myStoreUrl ? (
+              <a
+                href={myStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 transition-all shadow-sm active:scale-95 hidden sm:flex"
+                title="Open your store page as customers see it"
+              >
+                <Eye className="w-4 h-4" />
+                View my store
+              </a>
+            ) : (
+              <a
+                href="/"
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 transition-all shadow-sm active:scale-95 hidden sm:flex"
+              >
+                <Globe className="w-4 h-4" />
+                View Store
+              </a>
+            )}
             
             <button
               onClick={() => navigate('/admin/orders')}
