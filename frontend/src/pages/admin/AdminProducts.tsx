@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, Edit, Trash2, Tag, AlertCircle, TrendingUp, Database, Download, Upload, Check, X, Link as LinkIcon, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Plus, Search, Filter, Edit, Trash2, Tag, AlertCircle, TrendingUp, Database, Download, Upload, Check, X, Link as LinkIcon, Loader2, Image as ImageIcon, Store } from 'lucide-react';
 import { collection, limit, onSnapshot, query, where, deleteDoc, doc, writeBatch, addDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
@@ -52,6 +52,8 @@ const uploadImageToStorage = (
 export const AdminProducts = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  /** Admins can narrow the list to one store. Vendors only ever see their own. */
+  const [selectedVendor, setSelectedVendor] = useState('All');
   const [products, setProducts] = useState<ProductType[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -200,8 +202,22 @@ useEffect(() => {
     const matchesSearch = (p.title || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (p.brand || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || productInCategory(p, selectedCategory, categories);
-    return matchesSearch && matchesCategory;
+    const matchesVendor = selectedVendor === 'All' || String(p.vendorId || '') === selectedVendor;
+    return matchesSearch && matchesCategory && matchesVendor;
   });
+
+  // Stores for the admin's vendor filter, with how many products each has,
+  // busiest first so the stores with stock are at the top.
+  const vendorFilterOptions = (() => {
+    const counts = new Map<string, number>();
+    products.forEach(p => {
+      const id = String(p.vendorId || '');
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+    });
+    return vendors
+      .map(v => ({ id: String(v.id), name: v.name || 'Unnamed store', count: counts.get(String(v.id)) || 0 }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  })();
 
   /** Shared by both exports: vendors get their own id and commission locked in. */
   const sheetContext = async () => {
@@ -1002,9 +1018,27 @@ useEffect(() => {
           />
         </div>
         <div className="flex w-full sm:w-auto gap-4">
+          {(isAdmin || isSuperAdmin) && (
+            <div className="relative flex-1 sm:flex-none sm:w-56">
+              <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <select
+                value={selectedVendor}
+                onChange={(e) => setSelectedVendor(e.target.value)}
+                className={`w-full pl-9 pr-8 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none outline-none cursor-pointer ${selectedVendor === 'All' ? 'border-slate-200 bg-slate-50' : 'border-blue-300 bg-blue-50 text-blue-700 font-semibold'}`}
+                aria-label="Filter by vendor"
+              >
+                <option value="All">All Vendors</option>
+                {vendorFilterOptions.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} ({v.count})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="relative flex-1 sm:flex-none sm:w-48">
             <Filter className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <select 
+            <select
   value={selectedCategory}
   onChange={(e) => setSelectedCategory(e.target.value)}
   className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none outline-none cursor-pointer"
