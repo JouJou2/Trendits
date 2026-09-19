@@ -21,7 +21,7 @@ interface Order extends DocumentData {
 }
 
 export const AdminOverview = () => {
-  const { user, isAdmin, isSuperAdmin, vendorId } = useAuth();
+  const { user, isAdmin, isSuperAdmin, vendorId, vendorProfile } = useAuth();
   const isAdminView = isAdmin || isSuperAdmin;
 
   const navigate = useNavigate();
@@ -141,6 +141,13 @@ export const AdminOverview = () => {
     let unsubVendors: (() => void) | null = null;
     let unsubOrders: (() => void) | null = null;
 
+    // Any refused or failed query must end the loading state, or the cards
+    // show a spinner forever with nothing to explain why.
+    const stopLoading = (what: string) => (error: Error) => {
+      console.error(`Dashboard: could not load ${what}:`, error);
+      setStats(prev => ({ ...prev, loading: false }));
+    };
+
     const setupListeners = () => {
       // Scope queries based on role — vendors see only their own data
       if (!isAdminView && vendorId) {
@@ -174,12 +181,24 @@ export const AdminOverview = () => {
             const filtered = prev.filter(a => a.action !== 'low stock alert');
             return [...filtered, ...lowStock].slice(0, 6);
           });
-        });
+        }, stopLoading('vendor products'));
 
-        // Scoped orders
-        const oq = query(collection(db, 'orders'), where('vendorIds', 'array-contains', currentVendorId));
+        // The vendor's own copies of their orders. The site-wide orders list is
+        // admin-only, and reading it from here was refused — with no error
+        // handler, so the dashboard spun forever.
+        const oq = collection(db, 'vendors', currentVendorId, 'orders');
         unsubOrders = onSnapshot(oq, (snap: QuerySnapshot) => {
-          const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+          const orders = snap.docs
+            .map(doc => ({ id: doc.id, ...doc.data() } as Order))
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+          // Unique customers who bought from this store.
+          const customers = new Set<string>();
+          orders.forEach(o => {
+            const customerId = (o as any).customerId;
+            if (customerId && customerId !== 'guest') customers.add(customerId);
+          });
+          setStats(prev => ({ ...prev, totalUsers: customers.size }));
 
           // Compute vendor-specific revenue by summing item.subtotal for items matching vendorId
           const revenue = orders.reduce((acc, ord) => {
@@ -247,18 +266,7 @@ export const AdminOverview = () => {
             }
           });
           setChartData(last7Days);
-        });
-
-        // users count: unique customers who bought from this vendor
-        const uq = query(collection(db, 'orders'), where('vendorIds', 'array-contains', currentVendorId));
-        unsubUsers = onSnapshot(uq, (snap: QuerySnapshot) => {
-          const unique = new Set<string>();
-          snap.docs.forEach(d => {
-            const data = d.data() as any;
-            if (data.customerId && data.customerId !== 'guest') unique.add(data.customerId);
-          });
-          setStats(prev => ({ ...prev, totalUsers: unique.size }));
-        });
+        }, stopLoading('vendor orders'));
 
         // vendors count for vendor users is 1 (their store)
         setStats(prev => ({ ...prev, totalVendors: 1 }));
@@ -269,7 +277,7 @@ export const AdminOverview = () => {
         // ADMIN / SUPER ADMIN: global data for all vendors
         unsubUsers = onSnapshot(collection(db, 'users'), (snap: QuerySnapshot) => {
           setStats(prev => ({ ...prev, totalUsers: snap.size }));
-        });
+        }, stopLoading('users'));
 
         unsubProducts = onSnapshot(collection(db, 'products'), (snap: QuerySnapshot) => {
           setStats(prev => ({ ...prev, totalProducts: snap.size }));
@@ -295,11 +303,11 @@ export const AdminOverview = () => {
             const filtered = prev.filter(a => a.action !== 'low stock alert');
             return [...filtered, ...lowStock].slice(0, 6);
           });
-        });
+        }, stopLoading('products'));
 
         unsubVendors = onSnapshot(collection(db, 'vendors'), (snap: QuerySnapshot) => {
           setStats(prev => ({ ...prev, totalVendors: snap.size }));
-        });
+        }, stopLoading('vendors'));
 
         unsubOrders = onSnapshot(collection(db, 'orders'), (snap: QuerySnapshot) => {
           const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
@@ -344,7 +352,7 @@ export const AdminOverview = () => {
             }
           });
           setChartData(last7Days);
-        });
+        }, stopLoading('orders'));
       }
     };
 
@@ -421,7 +429,11 @@ export const AdminOverview = () => {
             <div>
               <p className="text-slate-500 text-sm font-medium">My Store</p>
               <h3 className="text-2xl font-bold text-slate-900 mt-1">
-                {stats.loading ? <Loader2 className="w-6 h-6 animate-spin text-slate-300" /> : 'Active'}
+                {/* The store's real status, not a hard-coded "Active". */}
+                {vendorProfile?.status === 'active' ? 'Active'
+                  : vendorProfile?.status === 'suspended' ? 'Suspended'
+                  : vendorProfile ? 'Pending approval'
+                  : <Loader2 className="w-6 h-6 animate-spin text-slate-300" />}
               </h3>
             </div>
             <div className="p-2 bg-orange-50 rounded-lg">

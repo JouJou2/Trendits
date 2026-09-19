@@ -273,11 +273,14 @@ service cloud.firestore {
     // VENDOR ORDERS (Subcollection) — Vendor's received orders
     // -------------------------------------------------------------------------
     
+    // A store's owner is either the account whose id the store has, or the
+    // account named in its ownerId — the dashboard supports both, so the
+    // rules must too.
     match /vendors/{vendorId}/orders/{orderId} {
-  allow read: if (isSignedIn() && request.auth.uid == vendorId) || isAdmin();
+  allow read: if (isSignedIn() && request.auth.uid == vendorId) || ownsVendor(vendorId) || isAdmin();
   allow create: if false;
   allow update: if isAdmin() ||
-    (isSignedIn() && request.auth.uid == vendorId && isOrderStatusUpdate());
+    (((isSignedIn() && request.auth.uid == vendorId) || ownsVendor(vendorId)) && isOrderStatusUpdate());
   allow delete: if isAdmin();
 }
     // -------------------------------------------------------------------------

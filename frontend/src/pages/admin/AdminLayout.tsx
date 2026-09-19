@@ -72,18 +72,16 @@ const { user, loading, isAdmin, isVendor, isSuperAdmin, vendorId, vendorProfile,
       }
 
       // Real checkout orders are created with status 'pending' — 'new' is only ever
-      // used by the demo data seeder, so both are checked here.
-      const ordersQuery = currentVendorId
-        ? query(
-            collection(db, 'orders'),
-            where('status', 'in', ['pending', 'new']),
-            where('vendorIds', 'array-contains', currentVendorId)
-          )
-        : query(collection(db, 'orders'), where('status', 'in', ['pending', 'new']));
+      // used by the demo data seeder, so both are checked here. Admins count the
+      // site-wide list; a vendor counts their own copies, because the site-wide
+      // list is admin-only and a vendor's query on it is refused.
+      const ordersQuery = isAdminView || !currentVendorId
+        ? query(collection(db, 'orders'), where('status', 'in', ['pending', 'new']))
+        : query(collection(db, 'vendors', currentVendorId, 'orders'), where('status', 'in', ['pending', 'new']));
 
       unsub = onSnapshot(ordersQuery, (snapshot) => {
         setNewOrdersCount(snapshot.size);
-      });
+      }, (error) => console.error('New orders count unavailable:', error));
     };
 
     subscribeToNewOrders();
@@ -91,7 +89,7 @@ const { user, loading, isAdmin, isVendor, isSuperAdmin, vendorId, vendorProfile,
     return () => {
       if (unsub) unsub();
     };
-  }, [isVendor, user]);
+  }, [isVendor, user, isAdminView]);
 
   // Ensure scroll triggers are reset when changing routes inside dashboard
   useEffect(() => {
