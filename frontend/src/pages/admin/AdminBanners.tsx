@@ -21,9 +21,10 @@ interface Banner {
   createdAt: string;
 }
 
-// Roughly matches the live desktop banner's proportions, so "how it looks here"
-// matches "how it looks on the homepage" closely enough to adjust by eye.
-const PREVIEW_ASPECT = 'aspect-[3.6/1]';
+// The homepage banner is 3:1 on every screen (see HeroCarousel in Home.tsx),
+// so "how it looks here" is how it looks to shoppers, phones included.
+// Upload banners at 3:1 — e.g. 2400×800 — and nothing is cropped.
+const PREVIEW_ASPECT = 'aspect-[3/1]';
 
 const emptyForm = { imageUrl: '', linkUrl: '', title: '', focalX: 50, focalY: 50, zoom: 1 };
 

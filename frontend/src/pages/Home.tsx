@@ -91,8 +91,13 @@ const HeroCarousel = ({ banners }: { banners: Banner[] }) => {
 
   return (
     <section className="w-full pb-2">
+      {/* The box keeps the banners' own wide shape (3:1) at every width. It
+          used to be a fixed 240px tall on phones, which squeezed a 3:1 banner
+          into a 1.5:1 box and cut off about half its width — the text and
+          product at the sides. The height cap only matters on very wide
+          monitors. */}
       <div
-        className="relative w-full h-[240px] sm:h-[320px] md:h-[420px] lg:h-[480px] overflow-hidden bg-slate-100 group"
+        className="relative w-full aspect-[3/1] max-h-[520px] overflow-hidden bg-slate-100 group"
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
