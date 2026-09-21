@@ -114,7 +114,6 @@ export const Account = () => {
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  const isCustomer = !isVendor && !isAdmin && !isSuperAdmin;
   const isAdminUser = isAdmin || isSuperAdmin;
 
   const [activeTab, setActiveTab] = useState(() => {
@@ -226,9 +225,11 @@ export const Account = () => {
     }
   }, [user]);
 
-  // Orders listener
+  // Orders listener. Every signed-in account can shop, vendors and admins
+  // included — this used to run for plain customers only, so a vendor's or
+  // admin's "My orders" tab showed a spinner forever.
   useEffect(() => {
-    if (!user || !isCustomer) return;
+    if (!user) return;
     const q = query(collection(db, 'users', user.id, 'orders'));
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Order[];
@@ -237,11 +238,11 @@ export const Account = () => {
       setLoadingOrders(false);
     }, () => setLoadingOrders(false));
     return () => unsub();
-  }, [user, isCustomer]);
+  }, [user]);
 
-  // Addresses listener
+  // Addresses listener — same as orders: any account can save addresses.
   useEffect(() => {
-    if (!user || !isCustomer) return;
+    if (!user) return;
     const q = query(collection(db, 'users', user.id, 'addresses'));
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as SavedAddress[];
@@ -250,7 +251,7 @@ export const Account = () => {
       setLoadingAddresses(false);
     }, () => setLoadingAddresses(false));
     return () => unsub();
-  }, [user, isCustomer]);
+  }, [user]);
 
   // Firestore products for favorites
   useEffect(() => {
