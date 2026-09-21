@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { collection, limit, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import {
-  type CategoryRecord, childrenOf, productInCategory, topLevelCategories,
+  type CategoryRecord, byDisplayOrder, childrenOf, productInCategory, topLevelCategories,
 } from '../utils/categories';
 
 /**
@@ -93,7 +93,6 @@ const subscribe = (listener: () => void) => {
 
 const getSnapshot = () => state;
 
-const byName = (a: CategoryRecord, b: CategoryRecord) => a.name.localeCompare(b.name);
 
 /**
  * Derived lists, rebuilt only when the store changes. They must keep the same
@@ -104,14 +103,14 @@ const derive = (snapshot: ShopCategoriesState) => {
   const { ready, categories: all, counts } = snapshot;
   const hasProducts = (slug: string) => (counts[slug] || 0) > 0;
 
-  /** Main categories that have products, "main" ones first, then by name. */
+  /** Main categories that have products, in the order an admin set. */
   const visibleTopLevel = topLevelCategories(all)
     .filter(c => hasProducts(c.slug))
-    .sort((a, b) => (a.type === 'main' ? 0 : 1) - (b.type === 'main' ? 0 : 1) || byName(a, b));
+    .sort(byDisplayOrder);
 
-  /** Subcategories of a category that have products, by name. */
+  /** Subcategories of a category that have products, in the order an admin set. */
   const visibleChildrenOf = (cat: CategoryRecord) =>
-    childrenOf(cat, all).filter(c => hasProducts(c.slug)).sort(byName);
+    childrenOf(cat, all).filter(c => hasProducts(c.slug)).sort(byDisplayOrder);
 
   /** Every category (main or sub) that has products. */
   const visibleAll = all.filter(c => hasProducts(c.slug));

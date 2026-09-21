@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Layers, Plus, Edit2, Trash2, Search, Loader2, Check, X, Upload, CornerDownRight, FolderTree } from 'lucide-react';
-import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
+import { Layers, Plus, Edit2, Trash2, Search, Loader2, Check, X, Upload, CornerDownRight, FolderTree, ChevronUp, ChevronDown } from 'lucide-react';
+import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../../services/firebase';
 import { toast } from 'react-hot-toast';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { importImageFromUrl } from '../../services/imageImportApi';
 import {
   type CategoryRecord, type VariantType, slugify, subcategorySlug,
-  topLevelCategories, childrenOf, parentOf,
+  topLevelCategories, childrenOf, parentOf, byDisplayOrder, siblingsOf,
 } from '../../utils/categories';
 
 const toggleVariantType = (types: VariantType[], type: VariantType): VariantType[] =>
@@ -142,6 +142,13 @@ export const AdminCategories = () => {
         type: newParent ? 'other' : newCategoryType,
         parentId: newParent ? newParent.id : null,
         variantTypes: newCategoryVariantTypes,
+        // Goes to the end of its group. Only once every sibling has been placed —
+        // a numbered newcomer would otherwise jump ahead of unplaced ones.
+        ...(() => {
+          const siblings = newParent ? childrenOf(newParent, categories) : topLevelCategories(categories);
+          const allPlaced = siblings.every(c => typeof c.order === 'number');
+          return allPlaced ? { order: siblings.reduce((max, c) => Math.max(max, (c.order as number) + 1), 0) } : {};
+        })(),
         createdAt: new Date().toISOString(),
         productCount: 0,
       });
@@ -234,27 +241,59 @@ export const AdminCategories = () => {
     }
   };
 
+  // ── Order ───────────────────────────────────────────────────────────────
+
+  const [movingId, setMovingId] = useState<string | null>(null);
+
+  /**
+   * Moves a category one place up or down among its siblings — main
+   * categories among main categories, subcategories within their parent.
+   * The whole sibling group is renumbered 0, 1, 2… in one batch, so categories
+   * that were never placed get a position too and the order never has gaps
+   * or ties.
+   */
+  const moveCategory = async (cat: CategoryRecord, direction: -1 | 1) => {
+    const siblings = siblingsOf(cat, categories);
+    const from = siblings.findIndex(c => c.id === cat.id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= siblings.length) return;
+
+    const reordered = [...siblings];
+    [reordered[from], reordered[to]] = [reordered[to], reordered[from]];
+
+    setMovingId(cat.id);
+    try {
+      const batch = writeBatch(db);
+      reordered.forEach((c, index) => {
+        if (c.order !== index) batch.update(doc(db, 'categories', c.id), { order: index });
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'categories');
+    } finally {
+      setMovingId(null);
+    }
+  };
+
   // ── List ────────────────────────────────────────────────────────────────
 
   const term = searchTerm.trim().toLowerCase();
   const matches = (c: CategoryRecord) => !term || (c.name || '').toLowerCase().includes(term);
 
-  // Main categories, each followed by its subcategories. A parent stays visible
-  // when only one of its children matches the search, so the child has context.
-  const grouped = useMemo(() => {
-    const sortByName = (a: CategoryRecord, b: CategoryRecord) => a.name.localeCompare(b.name);
-    const rows: { cat: CategoryRecord; depth: 0 | 1 }[] = [];
-    for (const parent of topLevelCategories(categories).sort(sortByName)) {
-      const kids = childrenOf(parent, categories).sort(sortByName).filter(matches);
-      if (matches(parent) || kids.length) {
-        rows.push({ cat: parent, depth: 0 });
-        kids.forEach(kid => rows.push({ cat: kid, depth: 1 }));
-      }
+  // Each main category with its subcategories, in display order. A parent
+  // stays visible when only one of its children matches the search, so the
+  // child keeps its context.
+  const groups = useMemo(() => {
+    const result: { parent: CategoryRecord; kids: CategoryRecord[] }[] = [];
+    for (const parent of topLevelCategories(categories).sort(byDisplayOrder)) {
+      const kids = childrenOf(parent, categories).sort(byDisplayOrder).filter(matches);
+      if (matches(parent) || kids.length) result.push({ parent, kids });
     }
+    // A subcategory whose parent was deleted still needs to be reachable.
     for (const orphan of categories.filter(c => c.parentId && !parentOf(c, categories)).filter(matches)) {
-      rows.push({ cat: orphan, depth: 0 });
+      result.push({ parent: orphan, kids: [] });
     }
-    return rows;
+    return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categories, term]);
 
@@ -275,6 +314,171 @@ export const AdminCategories = () => {
       ))}
     </div>
   );
+
+  /**
+   * One category row. `depth` 1 is a subcategory; `position` is its place
+   * among its siblings, which the ▲/▼ buttons move it within.
+   */
+  const renderRow = (cat: CategoryRecord, depth: 0 | 1, position: { index: number; count: number }) => {
+    const kidCount = depth === 0 ? childrenOf(cat, categories).length : 0;
+    return (
+      <>
+      {editingId === cat.id ? (
+        <div className="p-4 space-y-3">
+          <input
+            value={editName}
+            onChange={e => setEditName(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Category name"
+          />
+          <p className="text-[11px] text-slate-400 -mt-1">
+            Link stays <span className="font-mono">/{cat.slug}</span> so existing products keep working.
+          </p>
+          <div className="flex gap-3 items-center">
+            <div className="flex-1 relative">
+              <input
+                value={editImage}
+                onChange={e => setEditImage(e.target.value)}
+                className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Paste an image link (Google Drive works) or upload"
+              />
+              <button
+                type="button"
+                onClick={() => editImageInputRef.current?.click()}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
+                title="Upload from computer"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+              <input
+                ref={editImageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => handleImageFileUpload(e, (url) => setEditImage(url))}
+              />
+            </div>
+            {editImage.startsWith(STORAGE_PREFIX) && (
+              <div className="w-10 h-10 rounded-lg border border-slate-200 overflow-hidden bg-white shrink-0">
+                <img src={editImage} className="w-full h-full object-cover" alt="Preview" />
+              </div>
+            )}
+          </div>
+          {!cat.parentId && (
+            <select
+              value={editType}
+              onChange={e => setEditType(e.target.value as 'main' | 'other')}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="main">Main Category</option>
+              <option value="other">Other Category</option>
+            </select>
+          )}
+          <div>
+            <label className="block text-xs font-black uppercase tracking-widest text-slate-500 mb-1.5">Product Variants</label>
+            {variantCheckboxes(editVariantTypes, t => setEditVariantTypes(v => toggleVariantType(v, t)))}
+            {cat.parentId && editVariantTypes.length === 0 && (
+              <p className="text-[11px] text-slate-400 mt-1.5">Leave both unticked to use the main category&apos;s options.</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSaveEdit(cat)}
+              disabled={savingEdit || !editName.trim()}
+              className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold disabled:opacity-50"
+            >
+              {savingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} Save
+            </button>
+            <button onClick={() => setEditingId(null)} className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">
+              <X className="w-3 h-3" /> Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className={`flex items-center justify-between ${depth === 1 ? 'px-3 py-2.5' : 'p-4'}`}>
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Order among its siblings — hidden while searching, since the
+                filtered list is not the real order. */}
+            {!term && (
+              <div className="flex flex-col shrink-0 -my-1">
+                <button
+                  onClick={() => moveCategory(cat, -1)}
+                  disabled={position.index <= 0 || movingId !== null}
+                  className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-25 disabled:hover:text-slate-400 transition-colors"
+                  title={depth === 1 ? `Move up within ${parentOf(cat, categories)?.name || 'its category'}` : 'Move up'}
+                  aria-label={`Move ${cat.name} up`}
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => moveCategory(cat, 1)}
+                  disabled={position.index >= position.count - 1 || movingId !== null}
+                  className="p-0.5 text-slate-400 hover:text-blue-600 disabled:opacity-25 disabled:hover:text-slate-400 transition-colors"
+                  title={depth === 1 ? `Move down within ${parentOf(cat, categories)?.name || 'its category'}` : 'Move down'}
+                  aria-label={`Move ${cat.name} down`}
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {depth === 1 && <CornerDownRight className="w-4 h-4 text-blue-300 shrink-0" />}
+            {cat.image ? (
+              <img src={cat.image} className={`${depth === 1 ? 'w-8 h-8' : 'w-10 h-10'} rounded-lg object-cover shrink-0`} alt={cat.name} />
+            ) : (
+              <div className={`${depth === 1 ? 'p-1.5' : 'p-2.5'} bg-blue-50 rounded-lg text-blue-600 shrink-0`}><Layers className={depth === 1 ? 'w-4 h-4' : 'w-5 h-5'} /></div>
+            )}
+            <div className="min-w-0">
+              <span className={`font-bold text-slate-900 ${depth === 1 ? 'text-sm' : ''}`}>{cat.name}</span>
+              <div className="flex gap-2 items-center mt-0.5 flex-wrap">
+                {depth === 1 && (
+                  // Spelled out on every subcategory, so it is never mistaken
+                  // for a main category even out of its box (e.g. while searching).
+                  <span className="bg-blue-50 text-blue-700 text-[10px] py-0.5 px-2 rounded-full font-bold tracking-wide">
+                    in {parentOf(cat, categories)?.name || 'a deleted category'}
+                  </span>
+                )}
+                <span className="text-slate-500 text-xs font-mono">/{cat.slug}</span>
+                {depth === 0 && (
+                  <>
+                    <span className="w-1 h-1 bg-slate-300 rounded-full" />
+                    <span className={`text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider ${cat.type === 'main' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'}`}>
+                      {cat.type || 'other'}
+                    </span>
+                  </>
+                )}
+                {kidCount > 0 && (
+                  <span className="bg-emerald-50 text-emerald-700 text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
+                    <FolderTree className="w-3 h-3" /> {kidCount} sub
+                  </span>
+                )}
+                {(cat.variantTypes || []).map(vt => (
+                  <span key={vt} className="bg-purple-50 text-purple-600 text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider">{vt}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {depth === 0 && (
+              <button
+                onClick={() => { handleChooseParent(cat.id); newImageInputRef.current?.closest('form')?.scrollIntoView({ behavior: 'smooth' }); }}
+                className="p-2 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg transition-colors border border-transparent hover:border-emerald-100"
+                title={`Add a subcategory under ${cat.name}`}
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
+            <button onClick={() => startEdit(cat)} className="p-2 text-slate-400 hover:bg-slate-50 hover:text-blue-600 rounded-lg transition-colors border border-transparent hover:border-blue-100">
+              <Edit2 className="w-4 h-4" />
+            </button>
+            <button onClick={() => handleDeleteCategory(cat)} className="p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors border border-transparent hover:border-rose-100">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+      </>
+    );
+  };
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 text-slate-900">
@@ -300,140 +504,32 @@ export const AdminCategories = () => {
             </div>
           </div>
 
-          <div className="space-y-2.5">
-            {grouped.map(({ cat, depth }) => {
-              const kidCount = depth === 0 ? childrenOf(cat, categories).length : 0;
+          {term && (
+            <p className="text-xs text-slate-400 px-1">Clear the search to reorder categories.</p>
+          )}
+          <div className="space-y-3">
+            {groups.map(({ parent, kids }, groupIndex) => {
+              const allKids = childrenOf(parent, categories).sort(byDisplayOrder);
               return (
-                <div
-                  key={cat.id}
-                  className={`bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-blue-200 transition-colors shadow-sm ${depth === 1 ? 'ml-10' : ''}`}
-                >
-                  {editingId === cat.id ? (
-                    <div className="p-4 space-y-3">
-                      <input
-                        value={editName}
-                        onChange={e => setEditName(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Category name"
-                      />
-                      <p className="text-[11px] text-slate-400 -mt-1">
-                        Link stays <span className="font-mono">/{cat.slug}</span> so existing products keep working.
-                      </p>
-                      <div className="flex gap-3 items-center">
-                        <div className="flex-1 relative">
-                          <input
-                            value={editImage}
-                            onChange={e => setEditImage(e.target.value)}
-                            className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Paste an image link (Google Drive works) or upload"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => editImageInputRef.current?.click()}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
-                            title="Upload from computer"
-                          >
-                            <Upload className="w-4 h-4" />
-                          </button>
-                          <input
-                            ref={editImageInputRef}
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => handleImageFileUpload(e, (url) => setEditImage(url))}
-                          />
-                        </div>
-                        {editImage.startsWith(STORAGE_PREFIX) && (
-                          <div className="w-10 h-10 rounded-lg border border-slate-200 overflow-hidden bg-white shrink-0">
-                            <img src={editImage} className="w-full h-full object-cover" alt="Preview" />
+                <div key={parent.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:border-blue-200 transition-colors">
+                  {renderRow(parent, 0, { index: groupIndex, count: groups.length })}
+                  {kids.length > 0 && (
+                    // Subcategories sit inside their parent's box on an indented
+                    // rail, so it is obvious at a glance which category they belong to.
+                    <div className="bg-slate-50/70 border-t border-slate-100 pl-6 pr-2 py-2">
+                      <div className="border-l-2 border-blue-100 pl-3 space-y-1.5">
+                        {kids.map(kid => (
+                          <div key={kid.id} className="bg-white border border-slate-100 rounded-lg">
+                            {renderRow(kid, 1, { index: allKids.findIndex(k => k.id === kid.id), count: allKids.length })}
                           </div>
-                        )}
-                      </div>
-                      {!cat.parentId && (
-                        <select
-                          value={editType}
-                          onChange={e => setEditType(e.target.value as 'main' | 'other')}
-                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="main">Main Category</option>
-                          <option value="other">Other Category</option>
-                        </select>
-                      )}
-                      <div>
-                        <label className="block text-xs font-black uppercase tracking-widest text-slate-500 mb-1.5">Product Variants</label>
-                        {variantCheckboxes(editVariantTypes, t => setEditVariantTypes(v => toggleVariantType(v, t)))}
-                        {cat.parentId && editVariantTypes.length === 0 && (
-                          <p className="text-[11px] text-slate-400 mt-1.5">Leave both unticked to use the main category&apos;s options.</p>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleSaveEdit(cat)}
-                          disabled={savingEdit || !editName.trim()}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold disabled:opacity-50"
-                        >
-                          {savingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} Save
-                        </button>
-                        <button onClick={() => setEditingId(null)} className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">
-                          <X className="w-3 h-3" /> Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between p-4">
-                      <div className="flex items-center gap-4 min-w-0">
-                        {depth === 1 && <CornerDownRight className="w-4 h-4 text-slate-300 shrink-0" />}
-                        {cat.image ? (
-                          <img src={cat.image} className="w-10 h-10 rounded-lg object-cover shrink-0" alt={cat.name} />
-                        ) : (
-                          <div className="p-2.5 bg-blue-50 rounded-lg text-blue-600 shrink-0"><Layers className="w-5 h-5" /></div>
-                        )}
-                        <div className="min-w-0">
-                          <span className="font-bold text-slate-900">{cat.name}</span>
-                          <div className="flex gap-2 items-center mt-0.5 flex-wrap">
-                            <span className="text-slate-500 text-xs font-mono">/{cat.slug}</span>
-                            {depth === 0 && (
-                              <>
-                                <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                                <span className={`text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider ${cat.type === 'main' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'}`}>
-                                  {cat.type || 'other'}
-                                </span>
-                              </>
-                            )}
-                            {kidCount > 0 && (
-                              <span className="bg-emerald-50 text-emerald-700 text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
-                                <FolderTree className="w-3 h-3" /> {kidCount} sub
-                              </span>
-                            )}
-                            {(cat.variantTypes || []).map(vt => (
-                              <span key={vt} className="bg-purple-50 text-purple-600 text-[10px] py-0.5 px-2 rounded-full font-bold uppercase tracking-wider">{vt}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 shrink-0">
-                        {depth === 0 && (
-                          <button
-                            onClick={() => { handleChooseParent(cat.id); newImageInputRef.current?.closest('form')?.scrollIntoView({ behavior: 'smooth' }); }}
-                            className="p-2 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg transition-colors border border-transparent hover:border-emerald-100"
-                            title={`Add a subcategory under ${cat.name}`}
-                          >
-                            <Plus className="w-4 h-4" />
-                          </button>
-                        )}
-                        <button onClick={() => startEdit(cat)} className="p-2 text-slate-400 hover:bg-slate-50 hover:text-blue-600 rounded-lg transition-colors border border-transparent hover:border-blue-100">
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => handleDeleteCategory(cat)} className="p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors border border-transparent hover:border-rose-100">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        ))}
                       </div>
                     </div>
                   )}
                 </div>
               );
             })}
-            {grouped.length === 0 && (
+            {groups.length === 0 && (
               <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center text-slate-400 font-medium">
                 No categories found.
               </div>

@@ -25,7 +25,28 @@ export interface CategoryRecord {
   variantTypes?: VariantType[];
   productCount?: number;
   description?: string;
+  /** Position among its siblings, set from the admin Categories page. */
+  order?: number;
 }
+
+/**
+ * The order shoppers see categories in. Admins place categories with the
+ * arrows on the Categories admin page; ones never placed come after, "main"
+ * categories first and then A–Z, which is how they were ordered before.
+ */
+export const byDisplayOrder = (a: CategoryRecord, b: CategoryRecord) => {
+  const aPlaced = typeof a.order === 'number';
+  const bPlaced = typeof b.order === 'number';
+  if (aPlaced && bPlaced && a.order !== b.order) return (a.order as number) - (b.order as number);
+  if (aPlaced !== bPlaced) return aPlaced ? -1 : 1;
+  const aMain = a.type === 'main' ? 0 : 1;
+  const bMain = b.type === 'main' ? 0 : 1;
+  return aMain - bMain || a.name.localeCompare(b.name);
+};
+
+/** A category and its siblings — the set its arrows move it within. */
+export const siblingsOf = <T extends CategoryRecord>(cat: CategoryRecord, all: T[]): T[] =>
+  (cat.parentId ? all.filter(c => c.parentId === cat.parentId) : topLevelCategories(all)).sort(byDisplayOrder);
 
 /**
  * Must match what existing categories were created with — changing this would

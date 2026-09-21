@@ -7,7 +7,7 @@ import { auth, db, handleFirestoreError, OperationType } from '../../services/fi
 import { importImageFromUrl, importImages } from '../../services/imageImportApi';
 import { buildProductWorkbook, downloadWorkbook, PRODUCT_COLUMNS } from '../../utils/productSheet';
 import { imageLinksOf, planImport, productsToRows, toSheetRow, type ImportPlan } from '../../utils/productImport';
-import { type CategoryRecord, categoryOptions, productInCategory } from '../../utils/categories';
+import { type CategoryRecord, categoryOptions, categoryLabel, productInCategory } from '../../utils/categories';
 import { commissionRateOf, fetchVendorCommission } from '../../utils/commission';
 import { ProductType, Vendor, getDisplayPrice } from '../../data/products';
 import toast from 'react-hot-toast';
@@ -1126,7 +1126,12 @@ useEffect(() => {
                     {product.oldPrice && <div className="text-xs text-slate-400 line-through">${product.oldPrice.toFixed(2)}</div>}
                   </td>
                   <td className="px-6 py-4 text-slate-600 capitalize">
-  {categories.find(c => c.slug === product.categoryId)?.name || product.categoryId?.replace('-', ' ')}
+  {(() => {
+    // "Men › Shorts" rather than just "Shorts", so a subcategory is never
+    // mistaken for a main category.
+    const cat = categories.find(c => c.slug === product.categoryId);
+    return cat ? categoryLabel(cat, categories) : product.categoryId?.replace('-', ' ');
+  })()}
 </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2 transition-opacity">

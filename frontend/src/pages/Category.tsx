@@ -1,18 +1,20 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, Star, Loader2, ChevronRight, X } from 'lucide-react';
+import { ChevronDown, Star, Loader2, ChevronRight, X, CornerLeftUp } from 'lucide-react';
 import { allProducts, ProductType, getDisplayPrice } from '../data/products';
 import { ProductCard } from '../components/ProductCard';
 import { motion, Variants } from 'motion/react';
 import { collection, onSnapshot, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { type CategoryRecord, findBySlug, childrenOf, productCategorySlugs } from '../utils/categories';
+import { type CategoryRecord, findBySlug, childrenOf, parentOf, byDisplayOrder, productCategorySlugs } from '../utils/categories';
 
 interface CategoryMeta {
   title: string;
   subtitle: string;
   /** Real subcategories created under this category in the admin. */
   subcategories: { slug: string; name: string }[];
+  /** Set when this is a subcategory: the category it belongs to. */
+  parent?: { slug: string; name: string };
 }
 
 const defaultMeta = (slug: string): CategoryMeta => ({
@@ -60,9 +62,11 @@ export const Category = () => {
             title: data.name || data.slug,
             subtitle: data.description || `Browse our collection of ${data.name || data.slug}`,
             subcategories: childrenOf(data, records)
-              .sort((a, b) => a.name.localeCompare(b.name))
+              .sort(byDisplayOrder)
               .map(c => ({ slug: c.slug, name: c.name })),
           };
+          const parent = parentOf(data, records);
+          if (parent) cats[data.slug].parent = { slug: parent.slug, name: parent.name };
         });
         setAllCategories(records);
         setCategoryMetaMap(cats);
@@ -307,6 +311,17 @@ export const Category = () => {
           <li className="inline-flex items-center">
             <Link to="/" className="hover:text-primary transition-colors">Home</Link>
           </li>
+          {/* A subcategory shows the category it belongs to, as a link. */}
+          {meta.parent && (
+            <li>
+              <div className="flex items-center">
+                <ChevronRight className="w-4 h-4 mx-1" />
+                <Link to={`/category/${meta.parent.slug}`} className="hover:text-primary transition-colors capitalize">
+                  {meta.parent.name}
+                </Link>
+              </div>
+            </li>
+          )}
           <li>
             <div className="flex items-center">
               <ChevronRight className="w-4 h-4 mx-1" />
@@ -319,11 +334,19 @@ export const Category = () => {
       </motion.nav>
 
       {/* Header */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         className="mb-10"
       >
+        {meta.parent && (
+          <Link
+            to={`/category/${meta.parent.slug}`}
+            className="inline-flex items-center gap-1.5 mb-2 text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-700"
+          >
+            <CornerLeftUp className="w-3.5 h-3.5" /> Part of {meta.parent.name}
+          </Link>
+        )}
         <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-900 font-display mb-3 capitalize tracking-tight">
           {meta.title}.
         </h1>
