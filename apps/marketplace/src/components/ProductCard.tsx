@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Font, Radius, Shadow, tintFor } from '@/constants/theme';
 import { formatPrice, type Product } from '@/lib/catalog';
+import { useWishlist } from '@/lib/wishlist';
 import { isLightSwatch, swatchFor } from '@/lib/colours';
 
 const MAX_DOTS = 4;
@@ -25,6 +26,8 @@ interface ProductCardProps {
  * stock are chosen on the product page, as on the website.
  */
 export function ProductCard({ product, colours, width, imageHeight = 140, onPress }: ProductCardProps) {
+  const wishlist = useWishlist();
+  const saved = wishlist.has(product.id);
   const discounted = !!product.oldPrice && product.oldPrice > product.price;
   const discount = discounted ? Math.round(((product.oldPrice! - product.price) / product.oldPrice!) * 100) : 0;
   const soldOut = product.stock === 0;
@@ -47,11 +50,20 @@ export function ProductCard({ product, colours, width, imageHeight = 140, onPres
             <Text style={styles.badgeText}>-{discount}%</Text>
           </View>
         )}
-        {/* Saving to the wishlist arrives with accounts; the heart is
-            shown now so the card matches the design. */}
-        <View style={styles.heart}>
-          <Heart size={13} color={Colors.ink} strokeWidth={2} />
-        </View>
+        <Pressable
+          style={styles.heart}
+          onPress={() => wishlist.toggle(product.id)}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={saved ? `Remove ${product.title} from saved` : `Save ${product.title}`}
+        >
+          <Heart
+            size={13}
+            color={saved ? Colors.coral : Colors.ink}
+            fill={saved ? Colors.coral : 'none'}
+            strokeWidth={2}
+          />
+        </Pressable>
         {soldOut && (
           <View style={styles.soldOut}>
             <Text style={styles.soldOutText}>Sold out</Text>

@@ -8,7 +8,9 @@ import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Colors } from '@/constants/theme';
+import { AuthProvider } from '@/lib/auth';
 import { CartProvider } from '@/lib/cart';
+import { WishlistProvider } from '@/lib/wishlist';
 
 // Keep the splash up until Poppins is ready, so text never flashes in the
 // system font first.
@@ -35,13 +37,19 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ThemeProvider value={theme}>
         <StatusBar style="dark" />
-        <CartProvider>
-          {/* The tab bar lives in (tabs); product, search and cart are pushed
-              on top of it, each with its own back button. */}
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }}>
-            <Stack.Screen name="(tabs)" />
-          </Stack>
-        </CartProvider>
+        {/* Wishlist sits inside auth because saved products follow the
+            signed-in shopper. */}
+        <AuthProvider>
+          <WishlistProvider>
+            <CartProvider>
+              {/* The tab bar lives in (tabs); product, search, cart and
+                  sign-in are pushed on top, each with its own back button. */}
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }}>
+                <Stack.Screen name="(tabs)" />
+              </Stack>
+            </CartProvider>
+          </WishlistProvider>
+        </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );

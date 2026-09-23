@@ -12,6 +12,7 @@ import { Screen } from '@/components/Screen';
 import { Colors, Font, Radius, Shadow, Space } from '@/constants/theme';
 import { formatPrice, useProducts, type Product } from '@/lib/catalog';
 import { useCart } from '@/lib/cart';
+import { useWishlist } from '@/lib/wishlist';
 import { isLightSwatch, swatchFor } from '@/lib/colours';
 import { db } from '@/lib/firebase';
 
@@ -27,6 +28,7 @@ export default function ProductScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const cart = useCart();
+  const wishlist = useWishlist();
   const catalog = useProducts();
 
   const [product, setProduct] = useState<Product | null>(null);
@@ -129,8 +131,17 @@ export default function ProductScreen() {
               <ChevronLeft size={18} color={Colors.ink} strokeWidth={2.2} />
             </Pressable>
             <Text style={styles.topTitle}>Product</Text>
-            <Pressable style={styles.roundButton} accessibilityLabel="Save to wishlist">
-              <Heart size={17} color={Colors.ink} strokeWidth={2} />
+            <Pressable
+              style={styles.roundButton}
+              onPress={() => wishlist.toggle(product.id)}
+              accessibilityLabel={wishlist.has(product.id) ? 'Remove from saved' : 'Save for later'}
+            >
+              <Heart
+                size={17}
+                color={wishlist.has(product.id) ? Colors.coral : Colors.ink}
+                fill={wishlist.has(product.id) ? Colors.coral : 'none'}
+                strokeWidth={2}
+              />
             </Pressable>
           </View>
 
