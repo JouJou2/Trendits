@@ -9,8 +9,8 @@
       "@/assets/*": [
         "./assets/*"
       ],
-      "@shared/*": [
-        "../../frontend/src/utils/*"
+      "@web/*": [
+        "../../frontend/src/*"
       ]
     }
   },

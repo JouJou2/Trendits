@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   byDisplayOrder, childrenOf, productInCategory, topLevelCategories, type CategoryRecord,
-} from '@shared/categories';
+} from '@web/utils/categories';
 import { db } from './firebase';
 
 /**
@@ -102,7 +102,7 @@ export const useCategoryRecords = () =>
 /**
  * Categories the way the website shows them to shoppers: in the admin's
  * order, and only those with products — an empty one would lead to an empty
- * screen. Uses the website's own category rules (@shared/categories), so a
+ * screen. Uses the website's own category rules (@web/utils/categories), so a
  * product filed under a subcategory also counts for its parent.
  */
 export const useShopCategories = (products: Product[]) => {

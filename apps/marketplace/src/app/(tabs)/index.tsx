@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { router } from 'expo-router';
 import { ArrowRight, Search, ShoppingBag, SlidersHorizontal, Tag } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
 import {
@@ -7,11 +8,13 @@ import {
 } from 'react-native';
 
 import { ProductCard } from '@/components/ProductCard';
+import { ProductGrid } from '@/components/ProductGrid';
 import { Screen } from '@/components/Screen';
 import { Colors, Font, Radius, Space, TabBarClearance, tintFor } from '@/constants/theme';
 import {
-  colourFamilies, useBanners, useProducts, useShopCategories, type Banner, type Product,
+  colourFamilies, useBanners, useProducts, useShopCategories, type Banner,
 } from '@/lib/catalog';
+import { useCart } from '@/lib/cart';
 
 const PAD = Space.lg;
 const ROW_CARD_WIDTH = 148;
@@ -59,7 +62,12 @@ export default function HomeScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.circles}
             renderItem={({ item }) => (
-              <Pressable style={styles.circleItem} accessibilityRole="button" accessibilityLabel={item.name}>
+              <Pressable
+                style={styles.circleItem}
+                onPress={() => router.push({ pathname: '/category/[slug]', params: { slug: item.slug } })}
+                accessibilityRole="button"
+                accessibilityLabel={item.name}
+              >
                 <View style={[styles.circleRing, { backgroundColor: tintFor(item.slug) }]}>
                   {item.image ? (
                     <Image source={{ uri: item.image }} style={styles.circleImage} contentFit="cover" />
@@ -81,7 +89,7 @@ export default function HomeScreen() {
           <Text style={styles.error}>{products.error}</Text>
         ) : (
           <>
-            <SectionHeader title="Best sellers" />
+            <SectionHeader title="Best sellers" onViewAll={() => router.push('/search')} />
             <FlatList
               horizontal
               data={bestSellers}
@@ -89,11 +97,16 @@ export default function HomeScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.row}
               renderItem={({ item }) => (
-                <ProductCard product={item} colours={colours(item)} width={ROW_CARD_WIDTH} />
+                <ProductCard
+                  product={item}
+                  colours={colours(item)}
+                  width={ROW_CARD_WIDTH}
+                  onPress={() => router.push({ pathname: '/product/[id]', params: { id: item.id } })}
+                />
               )}
             />
 
-            <SectionHeader title="New arrivals" />
+            <SectionHeader title="New arrivals" onViewAll={() => router.push('/search')} />
             <ProductGrid products={newArrivals} colours={colours} />
           </>
         )}
@@ -103,6 +116,7 @@ export default function HomeScreen() {
 }
 
 function Header() {
+  const cart = useCart();
   return (
     <View style={styles.header}>
       <View style={styles.logo}>
@@ -113,8 +127,18 @@ function Header() {
         <Text style={styles.brand}>Trendit</Text>
         <Text style={styles.subline} numberOfLines={1}>Lebanese sellers, one checkout</Text>
       </View>
-      <Pressable style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Cart">
+      <Pressable
+        style={styles.iconButton}
+        onPress={() => router.push('/cart')}
+        accessibilityRole="button"
+        accessibilityLabel={cart.count > 0 ? `Cart, ${cart.count} items` : 'Cart'}
+      >
         <ShoppingBag size={18} color={Colors.ink} strokeWidth={1.9} />
+        {cart.count > 0 && (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{cart.count > 9 ? '9+' : cart.count}</Text>
+          </View>
+        )}
       </Pressable>
     </View>
   );
@@ -170,7 +194,12 @@ function Banners({ banners }: { banners: Banner[] }) {
 function SearchRow() {
   return (
     <View style={styles.searchRow}>
-      <Pressable style={styles.search} accessibilityRole="search" accessibilityLabel="Search products">
+      <Pressable
+        style={styles.search}
+        onPress={() => router.push('/search')}
+        accessibilityRole="search"
+        accessibilityLabel="Search products"
+      >
         <Search size={16} color={Colors.faint} strokeWidth={2.2} />
         <Text style={styles.searchText}>Search for products...</Text>
       </Pressable>
@@ -181,30 +210,14 @@ function SearchRow() {
   );
 }
 
-function SectionHeader({ title }: { title: string }) {
+function SectionHeader({ title, onViewAll }: { title: string; onViewAll: () => void }) {
   return (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.viewAll}>
+      <Pressable style={styles.viewAll} onPress={onViewAll} accessibilityRole="button" hitSlop={8}>
         <Text style={styles.viewAllText}>View all</Text>
         <ArrowRight size={12} color={Colors.muted} strokeWidth={2.4} />
-      </View>
-    </View>
-  );
-}
-
-/** Two columns; laid out by hand because it sits inside the page's ScrollView. */
-function ProductGrid({ products, colours }: { products: Product[]; colours: (p: Product) => string[] }) {
-  const rows: Product[][] = [];
-  for (let i = 0; i < products.length; i += 2) rows.push(products.slice(i, i + 2));
-  return (
-    <View style={styles.grid}>
-      {rows.map(row => (
-        <View key={row.map(p => p.id).join('-')} style={styles.gridRow}>
-          {row.map(p => <ProductCard key={p.id} product={p} colours={colours(p)} imageHeight={164} />)}
-          {row.length === 1 && <View style={styles.gridSpacer} />}
-        </View>
-      ))}
+      </Pressable>
     </View>
   );
 }
@@ -224,6 +237,13 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: Radius.button, backgroundColor: Colors.surface,
     alignItems: 'center', justifyContent: 'center',
   },
+  badge: {
+    position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, paddingHorizontal: 4,
+    borderRadius: Radius.pill, backgroundColor: Colors.coral,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: '#eef1fc',
+  },
+  badgeText: { fontFamily: Font.semibold, fontSize: 9, color: '#fff' },
 
   bannerWrap: { paddingTop: 14 },
   banner: { borderRadius: Radius.hero, overflow: 'hidden', backgroundColor: '#dbe6ff' },
