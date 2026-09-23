@@ -9,9 +9,8 @@ import { formatPrice } from '@/lib/catalog';
 import { useCart } from '@/lib/cart';
 
 /**
- * The basket. Placing the order comes next: it will post to the website's
- * own /api/orders, which re-prices everything and takes the stock, so the
- * app can never set its own prices.
+ * The basket. Checkout posts to the website's own /api/orders, which
+ * re-prices everything and takes the stock, so the app never sets a price.
  */
 export default function CartScreen() {
   const cart = useCart();
@@ -89,8 +88,8 @@ export default function CartScreen() {
               <Text style={styles.summaryValue}>{formatPrice(cart.subtotal)}</Text>
             </View>
             <Text style={styles.summaryNote}>Delivery is added at checkout.</Text>
-            <Pressable style={[styles.checkout, styles.checkoutDisabled]} disabled>
-              <Text style={styles.checkoutText}>Checkout — coming next</Text>
+            <Pressable style={styles.checkout} onPress={() => router.push('/checkout')}>
+              <Text style={styles.checkoutText}>Checkout</Text>
             </Pressable>
           </View>
         </>
@@ -135,7 +134,6 @@ const styles = StyleSheet.create({
     marginTop: 8, minHeight: 50, borderRadius: Radius.pill, backgroundColor: Colors.blue,
     alignItems: 'center', justifyContent: 'center',
   },
-  checkoutDisabled: { opacity: 0.45 },
   checkoutText: { fontFamily: Font.semibold, fontSize: 14, color: '#fff' },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 40 },
