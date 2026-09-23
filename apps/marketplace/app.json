@@ -9,8 +9,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "lb.trendit.marketplace",
-      "supportsTablet": false,
-      "icon": "./assets/expo.icon"
+      "supportsTablet": false
     },
     "android": {
       "package": "lb.trendit.marketplace",
@@ -33,7 +32,8 @@
         {
           "backgroundColor": "#0452C8",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 150,
+          "resizeMode": "contain"
         }
       ],
       "expo-font"
